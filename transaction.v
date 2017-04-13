@@ -13,7 +13,7 @@ Module NatMap := FMapList.Make Nat_as_OT.
 
 Definition address := nat.
 Definition version := nat.
-Definition value := Z.
+Definition value := nat.
 Definition lock := bool.
 Definition variable := nat.
 Definition store := NatMap.t value.
@@ -93,8 +93,9 @@ Inductive action:=
 |validate_read_item: Prop -> action
 |abort_txn: action
 |restart_txn: action
-|complete_write_item: value -> action
-|invalid_write_item: value -> action
+|complete_write_item: (*value -> action*)version -> action
+|unlock_write_item: version -> action
+(*|invalid_write_item: value -> action*)
 |commit_txn: version -> action
 |obtain_global_tid: action.
 
@@ -129,6 +130,40 @@ Definition trace_commit_last t: version :=
   match hd dummy (map snd (trace_filter_commit t)) with 
 	| commit_txn n => n
 	| _ => 0
+  end.
+
+(*
+Returns all lock_write_item actions in the trace.
+*)
+Definition trace_filter_lock tr: trace :=
+    filter (fun pr => match snd pr with
+                      | lock_write_item => true
+                      | _ => false
+                      end) tr.
+
+(*
+Returns all unlock_write_item actions in the trace.
+*)
+Definition trace_filter_unlock tr: trace :=
+    filter (fun pr => match snd pr with
+                      | unlock_write_item _ => true
+                      | _ => false
+                      end) tr.
+
+Function length (tr: trace) : nat := 
+  match tr with 
+  | [] => 0
+  | _ :: tr' => S (length tr')
+  end.
+(*
+Returns T if there exists lock_write_item
+*)
+Definition check_lock_or_unlock tr: Prop :=
+  match 
+    length (trace_filter_lock tr) =? length (trace_filter_unlock tr)  
+  with 
+	| true => True
+	| false => False
   end.
 
 (*
@@ -175,36 +210,187 @@ Function check_version (vs : list version) (v : version) : Prop :=
                   else False
   end.
 
+
+
+
 Inductive sto_trace : trace -> Prop :=
+
 | empty_step : sto_trace []
+
 | start_txn_step: forall t tid, 
     trace_tid_last tid t = dummy (* this tid doesn’t have start_txn*)
     -> sto_trace t
     -> sto_trace ((tid, start_txn)::t)
+
 | read_item_step: forall t tid val oldver,
     trace_tid_last tid t = start_txn (* start/read/write before read*)
 		\/ trace_tid_last tid t = read_item oldver
     \/ trace_tid_last tid t = write_item val
+    (*check locked or not*)
+    -> check_lock_or_unlock t
     -> sto_trace t
     -> sto_trace ((tid, read_item (trace_commit_last t)) :: t)
+
 | write_item_step: forall t tid oldval val ver, 
     trace_tid_last tid t = start_txn 
 		\/ trace_tid_last tid t = read_item ver
     \/ trace_tid_last tid t = write_item oldval
     -> sto_trace t
     -> sto_trace ((tid, write_item val) :: t)
+
 | try_commit_txn_step: forall t tid ver val,
 			trace_tid_last tid t = read_item ver
 			\/ trace_tid_last tid t = write_item val
 			-> sto_trace t
 			-> sto_trace ((tid, try_commit_txn)::t)
+
 | lock_write_item_step: forall t tid,
 			trace_tid_last tid t = try_commit_txn
 			/\ ~ trace_no_writes tid t
 			-> sto_trace t
 			-> sto_trace ((tid, lock_write_item) :: t)
+
 | validate_read_item_step: forall t tid,
-			(trace_tid_last tid t = try_commit_txn /\ trace_no_writes tid t )
-			\/ trace_tid_last tid t = lock_write_item
+			(trace_tid_last tid t = try_commit_txn /\ trace_no_writes tid t ) (*read only*)
+			\/ trace_tid_last tid t = lock_write_item (*lock write*)
 			-> sto_trace t
-			-> sto_trace ((tid, validate_read_item (check_version (read_versions_tid tid t)  (trace_commit_last t) ))::t).
+			-> sto_trace ((tid, validate_read_item (check_version (read_versions_tid tid t)  (trace_commit_last t) ))::t)
+
+(*new added...*)
+| abort_txn_step: forall t tid,
+      trace_tid_last tid t = validate_read_item False (*invalid*)
+      -> sto_trace t
+      -> sto_trace ((tid, abort_txn) :: t)
+      
+| complete_write_item_step: forall t tid,
+			trace_tid_last tid t = validate_read_item True (*valid read*)
+      /\ ~ trace_no_writes tid t
+      -> sto_trace t
+      -> sto_trace ((tid, complete_write_item (S (trace_commit_last t))) :: t)
+
+| unlock_write_item_step: forall t tid ver,
+      trace_tid_last tid t = complete_write_item ver
+			/\ ~ trace_no_writes tid t (*locked*)
+      -> sto_trace t
+      -> sto_trace ((tid, unlock_write_item ver) :: t)
+
+| commit_readonly_txn_step: forall t tid,
+      (trace_tid_last tid t = validate_read_item True /\ trace_no_writes tid t)(*read only*)
+      -> sto_trace t
+      -> sto_trace ((tid, commit_txn (trace_commit_last t)) :: t)
+
+| commit_write_txn_step: forall t tid ver,
+      trace_tid_last tid t = unlock_write_item ver(*unlock the write*)
+      -> sto_trace t
+      -> sto_trace ((tid, commit_txn ver) :: t)
+
+| restart_txn_step: forall t tid,
+      trace_tid_last tid t = abort_txn (*we get abort and then restart*)
+      -> sto_trace t
+    (*our restart is to add back*)
+      -> sto_trace ((trace_filter_tid tid t) ++ t).
+    (*but !!! we need to change the tid for old ones*)
+
+Example example1:  
+sto_trace [(2, commit_txn 1); (2, unlock_write_item 1); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, start_txn); (1, start_txn)].
+
+apply commit_write_txn_step.
+unfold trace_tid_last. simpl. auto.
+
+apply unlock_write_item_step.
+unfold trace_tid_last. simpl. split. auto.
+unfold trace_no_writes. simpl.
+admit.
+(*apply Exists_Forall_neg.*)
+assert (trace_commit_last ([(2, validate_read_item True);
+  (2, lock_write_item); (2, try_commit_txn); (2, write_item 4);
+  (1, commit_txn 0); (1, validate_read_item True); (1, try_commit_txn);
+  (1, read_item 0); (2, start_txn); (1, start_txn)]) = 0).
+{ unfold trace_commit_last. simpl. auto. }
+assert (1 = S (trace_commit_last
+      [(2, validate_read_item True); (2, lock_write_item);
+      (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0);
+      (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0);(2, start_txn); (1, start_txn)])).
+{ rewrite H. auto. }
+rewrite H0.
+
+apply complete_write_item_step; rewrite <-H0.
+unfold trace_tid_last. simpl. split. auto.
+unfold trace_no_writes. simpl.
+admit.
+clear H H0.
+assert (
+  (check_version (read_versions_tid 2 
+([(2, lock_write_item); (2, try_commit_txn);
+  (2, write_item 4); (1, commit_txn 0); (1, validate_read_item True);
+  (1, try_commit_txn); (1, read_item 0); (2, start_txn); (1, start_txn)])
+)  
+  (trace_commit_last 
+([(2, lock_write_item); (2, try_commit_txn);
+  (2, write_item 4); (1, commit_txn 0); (1, validate_read_item True);
+  (1, try_commit_txn); (1, read_item 0); (2, start_txn); (1, start_txn)])
+) = True)).
+  {unfold check_version. simpl. auto. }
+  rewrite <- H.
+
+apply validate_read_item_step; rewrite H. 
+unfold trace_tid_last. simpl. right. auto. clear H.
+
+apply lock_write_item_step. split.
+unfold trace_tid_last. simpl. auto.
+unfold trace_no_writes. simpl.
+admit.
+
+apply try_commit_txn_step with (ver := 0) (val:= 4).
+unfold trace_tid_last. simpl. auto.
+
+apply write_item_step with (ver:=0) (oldval:=0).
+unfold trace_tid_last. simpl. left. auto.
+assert ((trace_commit_last ([(1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, start_txn); (1, start_txn)])) = 0).
+{ unfold trace_commit_last. simpl. auto. }
+rewrite <- H. 
+
+apply commit_readonly_txn_step; rewrite H. 
+unfold trace_tid_last. simpl. split. auto.
+admit.
+clear H.
+assert (
+  (check_version (read_versions_tid 1 
+([(1, try_commit_txn); (1, read_item 0);
+  (2, start_txn); (1, start_txn)])
+) (trace_commit_last 
+([(1, try_commit_txn); (1, read_item 0);
+  (2, start_txn); (1, start_txn)])
+) = True)).
+  {unfold check_version. simpl. auto. } 
+  rewrite <- H.
+
+apply validate_read_item_step.
+unfold trace_tid_last. simpl. left. split. auto.
+admit.
+clear H.
+
+apply try_commit_txn_step with (ver:= 0) (val:= 0).
+unfold trace_tid_last. simpl. left. auto.
+
+assert (trace_commit_last [(2, start_txn); (1, start_txn)] = 0).
+{unfold trace_commit_last; simpl. auto. }
+rewrite <- H.
+
+apply read_item_step with (val:=0) (oldver:=0); rewrite H. clear H.
+unfold trace_tid_last. simpl. left. auto.
+unfold check_lock_or_unlock. simpl. auto.
+
+apply start_txn_step. unfold trace_tid_last. auto.
+apply start_txn_step. unfold trace_tid_last. auto.
+
+apply empty_step.
+
+
+
+
+
+
+
+
+
