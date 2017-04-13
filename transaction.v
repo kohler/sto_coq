@@ -291,7 +291,7 @@ Inductive sto_trace : trace -> Prop :=
       -> sto_trace ((trace_filter_tid tid t) ++ t).
     (*but !!! we need to change the tid for old ones*)
 
-Example example1:  
+Example sto_trace_example:  
 sto_trace [(2, commit_txn 1); (2, unlock_write_item 1); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, start_txn); (1, start_txn)].
 
 apply commit_write_txn_step.
@@ -300,8 +300,9 @@ unfold trace_tid_last. simpl. auto.
 apply unlock_write_item_step.
 unfold trace_tid_last. simpl. split. auto.
 unfold trace_no_writes. simpl.
-admit.
-(*apply Exists_Forall_neg.*)
+intuition. 
+inversion H. inversion H3. inversion H7. inversion H11. inversion H15.
+simpl in *. auto.
 assert (trace_commit_last ([(2, validate_read_item True);
   (2, lock_write_item); (2, try_commit_txn); (2, write_item 4);
   (1, commit_txn 0); (1, validate_read_item True); (1, try_commit_txn);
@@ -317,7 +318,9 @@ rewrite H0.
 apply complete_write_item_step; rewrite <-H0.
 unfold trace_tid_last. simpl. split. auto.
 unfold trace_no_writes. simpl.
-admit.
+intuition.
+inversion H1. inversion H5. inversion H9. inversion H13.
+simpl in *. auto.
 clear H H0.
 assert (
   (check_version (read_versions_tid 2 
@@ -339,7 +342,8 @@ unfold trace_tid_last. simpl. right. auto. clear H.
 apply lock_write_item_step. split.
 unfold trace_tid_last. simpl. auto.
 unfold trace_no_writes. simpl.
-admit.
+intuition.
+inversion H. inversion H3. simpl in *. auto.
 
 apply try_commit_txn_step with (ver := 0) (val:= 4).
 unfold trace_tid_last. simpl. auto.
@@ -352,8 +356,9 @@ rewrite <- H.
 
 apply commit_readonly_txn_step; rewrite H. 
 unfold trace_tid_last. simpl. split. auto.
-admit.
 clear H.
+unfold trace_no_writes. simpl.
+repeat apply Forall_cons; simpl; auto.
 assert (
   (check_version (read_versions_tid 1 
 ([(1, try_commit_txn); (1, read_item 0);
@@ -363,12 +368,13 @@ assert (
   (2, start_txn); (1, start_txn)])
 ) = True)).
   {unfold check_version. simpl. auto. } 
-  rewrite <- H.
+  rewrite <- H0.
 
 apply validate_read_item_step.
 unfold trace_tid_last. simpl. left. split. auto.
-admit.
-clear H.
+unfold trace_no_writes.
+repeat apply Forall_cons; simpl; auto.
+clear H H0.
 
 apply try_commit_txn_step with (ver:= 0) (val:= 0).
 unfold trace_tid_last. simpl. left. auto.
