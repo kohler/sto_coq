@@ -92,7 +92,7 @@ Inductive action:=
 |lock_write_item: action
 |validate_read_item: Prop -> action
 |abort_txn: action
-|restart_txn: action
+(*|restart_txn: action*)
 |complete_write_item: (*value -> action*)version -> action
 |unlock_write_item: version -> action
 (*|invalid_write_item: value -> action*)
@@ -212,9 +212,6 @@ Function check_version (vs : list version) (v : version) : Prop :=
                   else False
   end.
 
-
-
-
 Inductive sto_trace : trace -> Prop :=
 
 | empty_step : sto_trace []
@@ -249,6 +246,10 @@ Inductive sto_trace : trace -> Prop :=
 | lock_write_item_step: forall t tid,
 			trace_tid_last tid t = try_commit_txn
 			/\ ~ trace_no_writes tid t
+      -> check_lock_or_unlock t
+(****************************************)
+(*Note!!!!!! abort or just wait for lock*)
+(****************************************)
 			-> sto_trace t
 			-> sto_trace ((tid, lock_write_item) :: t)
 
@@ -258,7 +259,10 @@ Inductive sto_trace : trace -> Prop :=
 			-> sto_trace t
 			-> sto_trace ((tid, validate_read_item (check_version (read_versions_tid tid t)  (trace_commit_last t) ))::t)
 
-(*new added...*)
+(****************************************)
+(*Note!!!!!! *)
+(****************************************)
+
 | abort_readonly_txn_step: forall t tid,
       trace_tid_last tid t = validate_read_item False (*invalid*)
       /\ trace_no_writes tid t
@@ -269,7 +273,7 @@ Inductive sto_trace : trace -> Prop :=
       trace_tid_last tid t = validate_read_item False (*invalid*)
       /\ ~ trace_no_writes tid t
       -> sto_trace t
-      -> sto_trace ([(tid, unlock_write_item (trace_commit_last t)); (tid, abort_txn)] ++ t)
+      -> sto_trace ([(tid, abort_txn); (tid, unlock_write_item (trace_commit_last t))] ++ t)
       
 | complete_write_item_step: forall t tid,
 			trace_tid_last tid t = validate_read_item True (*valid read*)
@@ -298,7 +302,11 @@ Inductive sto_trace : trace -> Prop :=
       -> sto_trace t
     (*our restart is to add back*)
       -> sto_trace ((trace_filter_tid tid t) ++ t).
+(****************************************)
+(*Note!!!!!! *)
+(****************************************)
     (*but !!! we need to change the tid for old ones*)
+    (*how to restart.......*)
 
 Example sto_trace_example_commit:  
 sto_trace [(2, commit_txn 1); (2, unlock_write_item 1); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
@@ -337,6 +345,7 @@ unfold trace_tid_last. simpl. auto.
 unfold trace_no_writes. simpl.
 intuition.
 inversion H. inversion H3. simpl in *. auto.
+unfold check_lock_or_unlock. simpl. auto.
 
 apply try_commit_txn_step with (ver := 0) (val:= 4).
 unfold trace_tid_last. simpl. auto.
@@ -440,6 +449,7 @@ unfold trace_tid_last. simpl. auto.
 unfold trace_no_writes. simpl.
 intuition.
 inversion H. inversion H3. simpl in *. auto.
+unfold check_lock_or_unlock. simpl. auto.
 
 apply try_commit_txn_step with (ver := 0) (val:= 4).
 unfold trace_tid_last. simpl. auto.
