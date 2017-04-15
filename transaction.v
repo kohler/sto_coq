@@ -97,7 +97,8 @@ Inductive action:=
 (*|unlock_write_item: version -> action*)
 (*|invalid_write_item: value -> action*)
 |commit_txn: version -> action
-|obtain_global_tid: action.
+|seq_point: action.
+(*|obtain_global_tid: action.*)
 (*sp later than last lock*)
 Definition trace := list (tid * action).
 
@@ -347,11 +348,18 @@ Inductive sto_trace : trace -> Prop :=
       -> sto_trace t
       -> sto_trace ((tid, commit_txn ver) :: t).*)
 (****************************************)
-| commit_txn_step: forall t tid ver,
+
+(*sequential point*)
+| seq_point_step: forall t tid ver,
       (trace_tid_last tid t = validate_read_item True 
         /\ trace_no_writes tid t)
       \/ (trace_tid_last tid t = complete_write_item ver
 			  /\ ~ trace_no_writes tid t)
+      -> sto_trace t
+      -> sto_trace ((tid, seq_point) :: t)
+
+| commit_txn_step: forall t tid,
+      trace_tid_last tid t = seq_point
       -> sto_trace t
       -> sto_trace ((tid, commit_txn (trace_commit_complete_last t)) :: t).
 
@@ -363,17 +371,21 @@ Inductive sto_trace : trace -> Prop :=
       -> sto_trace ((trace_rollback newtid (trace_commit_last t) (trace_filter_startreadwrite tid t)) ++ t).*)
 
 Example sto_trace_example_rollback:  
-sto_trace [(3, commit_txn 1); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
+sto_trace [(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
 
-assert (trace_commit_complete_last [(3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)] = 1).
+assert (trace_commit_complete_last [(3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)] = 1).
 { unfold trace_commit_complete_last. simpl. auto. }
 rewrite <- H. 
-apply commit_txn_step with (ver:= 0); rewrite H. 
-unfold trace_tid_last. simpl. left. split. auto.
+apply commit_txn_step; rewrite H. 
+unfold trace_tid_last. simpl. auto.
 clear H.
+
+apply seq_point_step with (ver := 1).
+unfold trace_tid_last. simpl. left. split. auto.
 unfold trace_no_writes. simpl.
-repeat apply Forall_cons; simpl; auto. clear H.
-assert ((check_version (read_versions_tid 3 ([(3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) (trace_commit_last ([(3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) = True)).
+repeat apply Forall_cons; simpl; auto.
+
+assert ((check_version (read_versions_tid 3 ([(3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) (trace_commit_last ([(3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) = True)).
   {unfold check_version. simpl. auto. } 
   rewrite <- H.
 
@@ -395,7 +407,7 @@ rewrite H0. rewrite <- H.
 apply restart_txn_step. unfold trace_tid_last. simpl. auto. clear H H0.
 *)
 
-assert (trace_commit_last [(3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)] = 1).
+assert (trace_commit_last [(3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)] = 1).
 {unfold trace_commit_last; simpl. auto. }
 rewrite <- H.
 apply read_item_step with (val:=0) (oldver:=0); rewrite H.
@@ -408,7 +420,7 @@ unfold trace_tid_last. simpl. auto.
 apply abort_txn_step.
 unfold trace_tid_last. simpl. auto.
 
-assert ((check_version (read_versions_tid 1 ([(1, try_commit_txn); (2, commit_txn 1); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) (trace_commit_last ([(1, try_commit_txn); (2, commit_txn 1); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) = False)).
+assert ((check_version (read_versions_tid 1 ([(1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) (trace_commit_last ([(1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) = False)).
 unfold check_version. simpl. auto.
 rewrite <- H. 
 apply validate_read_item_step. 
@@ -420,11 +432,15 @@ clear H.
 apply try_commit_txn_step with (ver:= 0) (val:= 4).
 unfold trace_tid_last. simpl. auto.
 
-assert (trace_commit_complete_last [(2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)] = 1).
+
+assert (trace_commit_complete_last [ (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)] = 1).
 { unfold trace_commit_complete_last. simpl. auto. }
 rewrite <- H.
-apply commit_txn_step with (ver := 1); rewrite H.
-unfold trace_tid_last. simpl. right. split. auto.
+apply commit_txn_step; rewrite H.
+unfold trace_tid_last. simpl. auto.
+
+apply seq_point_step with (ver:=1). right.
+unfold trace_tid_last. simpl. split. auto.
 unfold trace_no_writes. simpl.
 intuition. 
 inversion H0. inversion H4. inversion H8. inversion H12. inversion H16.
