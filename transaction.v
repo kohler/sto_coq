@@ -402,6 +402,8 @@ apply seq_point_step with (ver := 1).
 unfold trace_tid_last. simpl. left. split. auto.
 unfold trace_no_writes. simpl.
 repeat apply Forall_cons; simpl; auto.
+unfold trace_no_commits. simpl.
+repeat apply Forall_cons; simpl; auto.
 
 assert ((check_version (read_versions_tid 3 ([(3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) (trace_commit_last ([(3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) = True)).
   {unfold check_version. simpl. auto. } 
@@ -463,6 +465,8 @@ unfold trace_no_writes. simpl.
 intuition. 
 inversion H0. inversion H4. inversion H8. inversion H12. inversion H16.
 simpl in H19. auto. 
+unfold trace_no_commits. simpl.
+repeat apply Forall_cons; simpl; auto.
 (*
 apply unlock_write_item_step.
 unfold trace_tid_last. simpl. split. auto.
@@ -532,12 +536,15 @@ assert (trace_commit_complete_last [(2, seq_point); (2, complete_write_item 1); 
 rewrite <- H. 
 apply commit_txn_step.
 unfold trace_tid_last; rewrite H. simpl. auto. rewrite H. clear H.
+
 apply seq_point_step with (ver:= 1). 
 unfold trace_tid_last. simpl. right. split. auto.
 unfold trace_no_writes. simpl.
 intuition. 
 inversion H. inversion H3. inversion H7. inversion H11. inversion H15.
 simpl in H18. auto.
+unfold trace_no_commits. simpl.
+repeat apply Forall_cons; simpl; auto.
 
 assert (trace_commit_last ([(2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, seq_point);  (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)]) = 0).
 { unfold trace_commit_last. simpl. auto. }
@@ -583,6 +590,8 @@ unfold trace_tid_last. simpl. left. split. auto.
 clear H.
 unfold trace_no_writes. simpl.
 repeat apply Forall_cons; simpl; auto. clear H.
+unfold trace_no_commits. simpl.
+repeat apply Forall_cons; simpl; auto. clear H.
 
 assert ((check_version (read_versions_tid 1 ([(1, try_commit_txn); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) (trace_commit_last ([(1, try_commit_txn); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) = True)).
   {unfold check_version. simpl. auto. } 
@@ -626,7 +635,20 @@ Function seq_list (sto_trace: trace): list nat:=
   | _ :: tail => seq_list tail
   end.
 
+
 Eval compute in seq_list [(2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
 
+Eval compute in seq_list [(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
+
+Function create_serialized_trace (sto_trace: trace) (seqls : list nat): trace:=
+  match seqls with
+  | [] => []
+  | head :: tail 
+    => create_serialized_trace sto_trace tail ++ trace_filter_tid head sto_trace
+  end.
+
+Eval compute in create_serialized_trace [(2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)] [1;2].
+
+Eval compute in create_serialized_trace [(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)] [2;3].
 
 
