@@ -203,12 +203,12 @@ Definition action_no_write e : Prop :=
   end.
 
 (*
-Returns true if an action is not a write action
-Returns false if an action is a write action.
+Returns true if an action is not a commit_txn action
+Returns false if an action is a commit_txn action.
 *)
 Definition action_no_commit e : Prop :=
   match e with
-  | commit_txn => False
+  | commit_txn _ => False
   | _ => True
   end.
 
@@ -224,7 +224,7 @@ Returns true if the transaction tid's trace has no writes
 Returns false otherwise.
 *)
 Definition trace_no_commits tid t: Prop :=
-  Forall action_no_write (map snd (trace_filter_tid tid t)).
+  Forall action_no_commit (map snd (trace_filter_tid tid t)).
 
 (*
 Returns all read_item actions in a trace of a particular transaction.
