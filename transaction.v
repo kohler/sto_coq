@@ -657,6 +657,9 @@ apply empty_step.
 Definition example_txn:=
 [(2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (2, read_item 0); (2, start_txn); (1, commit_txn 0); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (1, start_txn)].
 
+Definition example_txn2:=
+[(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
+
 Function seq_list (sto_trace: trace): list nat:=
   match sto_trace with
   | [] => []
@@ -664,10 +667,9 @@ Function seq_list (sto_trace: trace): list nat:=
   | _ :: tail => seq_list tail
   end.
 
+Eval compute in seq_list example_txn.
 
-Eval compute in seq_list [(2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
-
-Eval compute in seq_list [(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
+Eval compute in seq_list example_txn2.
 
 Function create_serialized_trace (sto_trace: trace) (seqls : list nat): trace:=
   match seqls with
@@ -676,9 +678,21 @@ Function create_serialized_trace (sto_trace: trace) (seqls : list nat): trace:=
     => create_serialized_trace sto_trace tail ++ trace_filter_tid head sto_trace
   end.
 
-Eval compute in create_serialized_trace [(2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)] [1;2].
+Eval compute in create_serialized_trace example_txn (seq_list example_txn).
 
-Eval compute in create_serialized_trace [(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)] [2;3].
+Eval compute in create_serialized_trace example_txn2 (seq_list example_txn2).
+
+Lemma seq_list_equal tid action trace:
+  action = seq_point <->
+  seq_list (create_serialized_trace ((tid, action) :: trace) (seq_list trace)) = seq_list trace ++ [tid].
+Proof.
+Admitted.
+
+Lemma seq_list_equal2 tid action trace:
+  ~(action = seq_point) ->
+  seq_list (create_serialized_trace ((tid, action) :: trace) (seq_list trace)) = seq_list trace.
+Proof.
+Admitted.
 
 Function check_is_serial_trace (tr: trace) (maxtid: nat): Prop :=
   match tr with 
@@ -713,20 +727,76 @@ Function exec (sto_trace: trace) (commit_tid: list nat) : list (tid * action) :=
             else exec tail commit_tid
   end.
 
-Eval compute in exec [(2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)] [1;2].
+Eval compute in exec example_txn (seq_list example_txn).
+
+Function tid_write_value (trace: trace) : list value :=
+  match trace with
+  | [] => []
+  | (_, write_item val) :: tail => val :: tid_write_value tail
+  | _ :: tail => tid_write_value tail
+  end.
+
+Function get_write_value (trace: trace) (tids: list nat) : list (nat * (list value)):=
+  match tids with
+  | [] => []
+  | head :: tail => (head, tid_write_value (trace_filter_tid head trace)) :: get_write_value trace tail
+  end.
+
+Definition get_write_value_out (trace: trace) : list (nat * (list value)) :=
+  get_write_value trace (seq_list trace).
+
+Eval compute in get_write_value_out example_txn.
+
+Function compare_value (ls1: list value) (ls2: list value): bool:=
+  match ls1, ls2 with
+  | [], [] => true
+  | _ , [] => false
+  | [], _ => false
+  | h1::t1, h2::t2 => if h1=?h2 then compare_value t1 t2 else false
+  end.
+
+Function compare_write_list (ls1: list (nat * (list value))) (ls2:list (nat * (list value))): Prop :=
+  match ls1, ls2 with
+  | [], [] => True
+  | _ , [] => False
+  | [], _ => False
+  | (tid1, ver1)::t1, (tid2, ver2)::t2 
+        => if compare_value ver1 ver2 then compare_write_list t1 t2
+            else False
+  end.
+
+Definition write_synchronization trace1 trace2: Prop:=
+  compare_write_list (get_write_value_out trace1) (get_write_value_out trace2).
 
 Definition last_write_value trace: nat:=
   trace_write_last (exec trace (seq_list trace)).
 
-Eval compute in last_write_value [(2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
-
+Eval compute in last_write_value example_txn.
+(*
 Definition write_synchronization trace1 trace2: Prop:=
   if (last_write_value trace1) =? (last_write_value trace2)
   then True
   else False.
-
+*)
 Eval compute in write_synchronization example_txn (create_serialized_trace example_txn (seq_list example_txn)).
 
+Lemma write_consistency trace:
+  sto_trace trace 
+  -> sto_trace (create_serialized_trace trace (seq_list trace))
+  -> write_synchronization trace (create_serialized_trace trace (seq_list trace)).
+
+Proof.
+  intros.
+  induction H; simpl.
+  - unfold write_synchronization; unfold get_write_value_out; simpl; auto.
+  - unfold write_synchronization; unfold get_write_value_out; simpl.
+    assert (seq_list (create_serialized_trace ((tid0, start_txn) :: t) (seq_list t)) = seq_list t).
+    {
+      remember (start_txn) as action. 
+      apply seq_list_equal2. rewrite Heqaction. intuition. inversion H2.
+    }
+  rewrite H2.
+Admitted.
 
 Function tid_read_version (trace: trace) : list version :=
   match trace with
