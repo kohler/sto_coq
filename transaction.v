@@ -701,13 +701,25 @@ Eval compute in create_serialized_trace example_txn (seq_list example_txn).
 
 Eval compute in create_serialized_trace example_txn2 (seq_list example_txn2).
 
+Lemma serial_seqlist_equal trace:
+  sto_trace trace ->
+  seq_list trace = seq_list (create_serialized_trace trace (seq_list trace)).
+  intros. induction H.
+  - simpl. auto.
+  - simpl. 
+
 (*
 This lemma proves that the seq_point of each transaction in a STO-trace determines its serialized order in the serial trace
 *)
 Lemma seq_list_equal tid action trace:
   action = seq_point <->
-  seq_list (create_serialized_trace ((tid, action) :: trace) (seq_list trace)) = seq_list trace ++ [tid].
+  seq_list (create_serialized_trace ((tid, action) :: trace) (seq_list ((tid, action) :: trace))) = seq_list trace ++ [tid].
 Proof.
+  split.
+  intros. subst. 
+  simpl. 
+  - 
+    Search ( _ =? _ ).
 Admitted.
 
 (*
@@ -721,27 +733,6 @@ Proof.
 Admitted.
 
 (*
-The function checks if a trace is a serial trace by making sure that
-tid is only increaing as we traverse the trace
-In this function, we assume that the trace is in the correct order.
-That is, the first (tid*action) in the trace is actually the first one that gets to be executed
-*)
-Function check_is_serial_trace (tr: trace) (maxtid: nat): Prop :=
-  match tr with 
-  | [] => True
-  | (tid, _) :: tail => if tid <? maxtid 
-                          then False
-                          else check_is_serial_trace tail tid
-  end.
-
-Definition is_serial_trace tr: Prop :=
-  check_is_serial_trace (rev tr) 0.
-
-Eval compute in is_serial_trace [(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (2, read_item 0); (2, start_txn)].
-
-Eval compute in is_serial_trace [(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
-
-(*
 Check whether an element a is in the list l
 *)
 Fixpoint In_bool (a:nat) (l:list nat) : bool :=
@@ -749,6 +740,30 @@ Fixpoint In_bool (a:nat) (l:list nat) : bool :=
     | [] => false
     | b :: m => (b =? a) || In_bool a m
   end.
+
+(*
+The function checks if a trace is a serial trace by making sure that
+tid is only increaing as we traverse the trace
+In this function, we assume that the trace is in the correct order.
+That is, the first (tid*action) in the trace is actually the first one that gets to be executed
+*)
+Function check_is_serial_trace (tr: trace) (tidls: list nat): Prop :=
+  match tr with 
+  | [] => True
+  | (tid, _) :: tail => if (negb (tid =? (hd 0 tidls))) && (In_bool tid tidls)
+                          then False
+                          else check_is_serial_trace tail (tid :: tidls)
+  end.
+
+Definition is_serial_trace tr: Prop :=
+  check_is_serial_trace (rev tr) [].
+
+Eval compute in is_serial_trace [(2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (2, read_item 0); (2, start_txn); (3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn)].
+
+Eval compute in is_serial_trace [(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
+
+Eval compute in is_serial_trace example_txn.
+
 
 (*
 This function executes STO trace in the reverse order
@@ -790,8 +805,8 @@ Function get_write_value (trace: trace) (tids: list nat) : list (nat * (list val
   end.
 
 
-Definition get_write_value_out (trace: trace) : list (nat * (list value)) :=
-  get_write_value trace (seq_list trace).
+Definition get_write_value_out (sto_trace: trace) : list (nat * (list value)) :=
+  get_write_value sto_trace (seq_list sto_trace).
 
 Eval compute in get_write_value_out example_txn.
 
@@ -821,7 +836,7 @@ Function compare_write_list (ls1: list (nat * (list value))) (ls2:list (nat * (l
   | _ , [] => False
   | [], _ => False
   | (tid1, ver1)::t1, (tid2, ver2)::t2 
-        => if compare_value ver1 ver2 then compare_write_list t1 t2
+        => if (tid1 =? tid2 ) && (compare_value ver1 ver2) then compare_write_list t1 t2
             else False
   end.
 
@@ -857,16 +872,17 @@ Lemma write_consistency trace:
   -> write_synchronization trace (create_serialized_trace trace (seq_list trace)).
 
 Proof.
-(*  intros.
-  induction H; simpl.
+  intros.
+  induction H.
   - unfold write_synchronization; unfold get_write_value_out; simpl; auto.
-  - unfold write_synchronization; unfold get_write_value_out; simpl.
-    assert (seq_list (create_serialized_trace ((tid0, start_txn) :: t) (seq_list t)) = seq_list t).
+  - unfold write_synchronization. unfold get_write_value_out.
+    assert (seq_list (create_serialized_trace ((tid0, start_txn) :: t) (seq_list ((tid0, start_txn) :: t))) = seq_list t).
     {
       remember (start_txn) as action. 
-      apply seq_list_equal2. rewrite Heqaction. intuition. inversion H2.
+      apply seq_list_equal2. rewrite Heqaction. intuition. inversion H2. 
     }
-  rewrite H2.*)
+  
+  rewrite H3.
 Admitted.
 
 (*
@@ -920,7 +936,7 @@ Function compare_read_list (ls1: list (nat * (list version))) (ls2:list (nat * (
   | _ , [] => False
   | [], _ => False
   | (tid1, ver1)::t1, (tid2, ver2)::t2 
-        => if compare_version ver1 ver2 then compare_read_list t1 t2
+        => if (tid1 =? tid2 ) && (compare_version ver1 ver2) then compare_read_list t1 t2
             else False
   end.
 
@@ -959,7 +975,7 @@ Theorem txn_equal t:
   -> Exec_Equivalence t t'.
 Proof.
   exists (create_serialized_trace t (seq_list t)).
-  intros.
+  intros. 
   unfold Exec_Equivalence. split.
   apply write_consistency; auto.
   apply read_consistency; auto.
