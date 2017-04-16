@@ -1,20 +1,23 @@
 Theorem 6 is the meat, but you need prior definitions and lemmas to understand it.
 
-Definition 1 (Committed trace): A committed trace t' of a trace t is the trace that is obtained by filtering out all operations belonging to transactions that do not have a serialization point in t.
+Definition 1 (Committed trace): A committed trace t' of a trace t is the trace that is obtained by 
+filtering out all operations belonging to transactions that do not have a serialization point in t.
 
 Lemma 2: If t is a valid sto trace, then its serialized trace t' is a valid sto trace.
-This is a direct result of Definition 2. 
+This is a direct result of Definition 1. 
 
-Definition 3 (Serialized trace):  A serialized trace t' of a trace t is t's committed trace reordered by grouping together actions of the same transaction in the order of the serialization points.
+Definition 3 (Serialized trace):  A serialized trace t' of a trace t is t's committed trace reordered by 
+grouping together actions of the same transaction in the order of the serialization points.
 
 Lemma 4: A serialized trace t' of t is serial.
-This is a direct result of Definition 5.
+This is a direct result of Definition 3.
 
 (* Omitted definition: sto_trace, read-write synchronization, write-write synchronization. 
 Important: read and write synchronization lists are obtained from committed traces.
 *)
 
-Definition 5 (Trace equivalence): Two traces t and t' are equivalent if read-write synchronization and write-write synchronization are satisfied. 
+Definition 5 (Trace equivalence): Two traces t and t' are equivalent if read-write synchronization 
+and write-write synchronization are satisfied. 
 
 Theorem 6 (Serializability): For all sto trace t, the serialized trace t' of t is equivalent to t.
 Proof:
