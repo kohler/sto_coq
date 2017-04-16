@@ -783,10 +783,11 @@ Eval compute in write_synchronization example_txn (create_serialized_trace examp
 Lemma write_consistency trace:
   sto_trace trace 
   -> sto_trace (create_serialized_trace trace (seq_list trace))
+  -> is_serial_trace (create_serialized_trace trace (seq_list trace))
   -> write_synchronization trace (create_serialized_trace trace (seq_list trace)).
 
 Proof.
-  intros.
+(*  intros.
   induction H; simpl.
   - unfold write_synchronization; unfold get_write_value_out; simpl; auto.
   - unfold write_synchronization; unfold get_write_value_out; simpl.
@@ -795,7 +796,7 @@ Proof.
       remember (start_txn) as action. 
       apply seq_list_equal2. rewrite Heqaction. intuition. inversion H2.
     }
-  rewrite H2.
+  rewrite H2.*)
 Admitted.
 
 Function tid_read_version (trace: trace) : list version :=
@@ -814,9 +815,9 @@ Function get_read_version (trace: trace) (tids: list nat) : list (nat * (list ve
 Definition get_read_version_out (trace: trace) : list (nat * (list version)) :=
   get_read_version trace (seq_list trace).
 
-Eval compute in get_read_version_out [(2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
+Eval compute in get_read_version_out example_txn.
 
-Eval compute in get_read_version_out [(2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (2, read_item 0); (2, start_txn); (1, commit_txn 0); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (1, start_txn)].
+Eval compute in get_read_version_out example_txn2.
 
 Function compare_version (ls1: list version) (ls2: list version): bool:=
   match ls1, ls2 with
@@ -843,8 +844,28 @@ Eval compute in read_synchronization example_txn (create_serialized_trace exampl
 
 Eval compute in compare_read_list [(1, [0;0]); (2, [1;1])] [(1, [0]);(2, [1;1])].
     
+Lemma read_consistency trace:
+  sto_trace trace 
+  -> sto_trace (create_serialized_trace trace (seq_list trace))
+  -> is_serial_trace (create_serialized_trace trace (seq_list trace))
+  -> read_synchronization trace (create_serialized_trace trace (seq_list trace)).
+Admitted.
+
 Definition Exec_Equivalence trace1 trace2: Prop:=
   write_synchronization trace1 trace2 /\ read_synchronization trace1 trace2.
 
 Eval compute in Exec_Equivalence example_txn (create_serialized_trace example_txn (seq_list example_txn)).
+
+Theorem txn_equal t:
+  sto_trace t
+  -> exists t', sto_trace t'
+  -> is_serial_trace t'
+  -> Exec_Equivalence t t'.
+Proof.
+  exists (create_serialized_trace t (seq_list t)).
+  intros.
+  unfold Exec_Equivalence. split.
+  apply write_consistency; auto.
+  apply read_consistency; auto.
+Qed.
   
