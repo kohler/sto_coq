@@ -116,6 +116,23 @@ Definition trace_filter_commit tr: trace :=
                       | commit_txn _ => true
                       | _ => false
                       end) tr.
+(*
+Returns all write actions in the trace.
+*)
+Definition trace_filter_write tr: trace :=
+    filter (fun pr => match snd pr with
+                      | write_item _ => true
+                      | _ => false
+                      end) tr.
+
+(*
+Returns all read actions in the trace.
+*)
+Definition trace_filter_read tr: trace :=
+    filter (fun pr => match snd pr with
+                      | read_item _ => true
+                      | _ => false
+                      end) tr.
 
 (*
 Returns all commit actions in the trace. (for commit version update)
@@ -141,6 +158,16 @@ If there is no commit in the trace, returns 0.
 Definition trace_commit_last t: version :=
   match hd dummy (map snd (trace_filter_commit t)) with 
 	| commit_txn n => n
+	| _ => 0
+  end.
+
+(*
+Returns the value of the last write
+If there is no write in the trace, returns 0.
+*)
+Definition trace_write_last t: value :=
+  match hd dummy (map snd (trace_filter_write t)) with 
+	| write_item n => n
 	| _ => 0
   end.
 
@@ -372,7 +399,7 @@ Inductive sto_trace : trace -> Prop :=
         /\ trace_no_writes tid t)
       \/ (trace_tid_last tid t = complete_write_item ver
 			  /\ ~ trace_no_writes tid t)
-      /\ trace_no_commits tid t
+      -> trace_no_commits tid t
       -> sto_trace t
       -> sto_trace ((tid, seq_point) :: t)
 
@@ -401,6 +428,8 @@ clear H.
 apply seq_point_step with (ver := 1).
 unfold trace_tid_last. simpl. left. split. auto.
 unfold trace_no_writes. simpl.
+repeat apply Forall_cons; simpl; auto.
+unfold trace_no_commits. simpl.
 repeat apply Forall_cons; simpl; auto.
 
 assert ((check_version (read_versions_tid 3 ([(3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) (trace_commit_last ([(3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) = True)).
@@ -463,6 +492,8 @@ unfold trace_no_writes. simpl.
 intuition. 
 inversion H0. inversion H4. inversion H8. inversion H12. inversion H16.
 simpl in H19. auto. 
+unfold trace_no_commits. simpl.
+repeat apply Forall_cons; simpl; auto.
 (*
 apply unlock_write_item_step.
 unfold trace_tid_last. simpl. split. auto.
@@ -532,12 +563,15 @@ assert (trace_commit_complete_last [(2, seq_point); (2, complete_write_item 1); 
 rewrite <- H. 
 apply commit_txn_step.
 unfold trace_tid_last; rewrite H. simpl. auto. rewrite H. clear H.
+
 apply seq_point_step with (ver:= 1). 
 unfold trace_tid_last. simpl. right. split. auto.
 unfold trace_no_writes. simpl.
 intuition. 
 inversion H. inversion H3. inversion H7. inversion H11. inversion H15.
 simpl in H18. auto.
+unfold trace_no_commits. simpl.
+repeat apply Forall_cons; simpl; auto.
 
 assert (trace_commit_last ([(2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, seq_point);  (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)]) = 0).
 { unfold trace_commit_last. simpl. auto. }
@@ -583,6 +617,8 @@ unfold trace_tid_last. simpl. left. split. auto.
 clear H.
 unfold trace_no_writes. simpl.
 repeat apply Forall_cons; simpl; auto. clear H.
+unfold trace_no_commits. simpl.
+repeat apply Forall_cons; simpl; auto. clear H.
 
 assert ((check_version (read_versions_tid 1 ([(1, try_commit_txn); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) (trace_commit_last ([(1, try_commit_txn); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) = True)).
   {unfold check_version. simpl. auto. } 
@@ -618,7 +654,218 @@ apply start_txn_step. unfold trace_tid_last. auto.
 
 apply empty_step.
 
+Definition example_txn:=
+[(2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (2, read_item 0); (2, start_txn); (1, commit_txn 0); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (1, start_txn)].
 
+Definition example_txn2:=
+[(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
 
+Function seq_list (sto_trace: trace): list nat:=
+  match sto_trace with
+  | [] => []
+  | (tid, seq_point) :: tail => seq_list tail ++ [tid]
+  | _ :: tail => seq_list tail
+  end.
 
+Eval compute in seq_list example_txn.
 
+Eval compute in seq_list example_txn2.
+
+Function create_serialized_trace (sto_trace: trace) (seqls : list nat): trace:=
+  match seqls with
+  | [] => []
+  | head :: tail 
+    => create_serialized_trace sto_trace tail ++ trace_filter_tid head sto_trace
+  end.
+
+Eval compute in create_serialized_trace example_txn (seq_list example_txn).
+
+Eval compute in create_serialized_trace example_txn2 (seq_list example_txn2).
+
+Lemma seq_list_equal tid action trace:
+  action = seq_point <->
+  seq_list (create_serialized_trace ((tid, action) :: trace) (seq_list trace)) = seq_list trace ++ [tid].
+Proof.
+Admitted.
+
+Lemma seq_list_equal2 tid action trace:
+  ~(action = seq_point) ->
+  seq_list (create_serialized_trace ((tid, action) :: trace) (seq_list trace)) = seq_list trace.
+Proof.
+Admitted.
+
+Function check_is_serial_trace (tr: trace) (maxtid: nat): Prop :=
+  match tr with 
+  | [] => True
+  | (tid, _) :: tail => if tid <? maxtid 
+                          then False
+                          else check_is_serial_trace tail tid
+  end.
+
+Definition is_serial_trace tr: Prop :=
+  check_is_serial_trace (rev tr) 0.
+
+Eval compute in is_serial_trace [(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (2, read_item 0); (2, start_txn)].
+
+Eval compute in is_serial_trace [(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
+
+Fixpoint In_bool (a:nat) (l:list nat) : bool :=
+  match l with
+    | [] => false
+    | b :: m => (b =? a) || In_bool a m
+  end.
+
+Function exec (sto_trace: trace) (commit_tid: list nat) : list (tid * action) :=
+  match sto_trace with
+  | [] => []
+  | (tid, action) :: tail => if (In_bool tid commit_tid)
+            then match action with
+                | read_item _ => (tid, action) :: exec tail commit_tid
+                | write_item _ => (tid, action) :: exec tail commit_tid
+                | _ => exec tail commit_tid
+                 end
+            else exec tail commit_tid
+  end.
+
+Eval compute in exec example_txn (seq_list example_txn).
+
+Function tid_write_value (trace: trace) : list value :=
+  match trace with
+  | [] => []
+  | (_, write_item val) :: tail => val :: tid_write_value tail
+  | _ :: tail => tid_write_value tail
+  end.
+
+Function get_write_value (trace: trace) (tids: list nat) : list (nat * (list value)):=
+  match tids with
+  | [] => []
+  | head :: tail => (head, tid_write_value (trace_filter_tid head trace)) :: get_write_value trace tail
+  end.
+
+Definition get_write_value_out (trace: trace) : list (nat * (list value)) :=
+  get_write_value trace (seq_list trace).
+
+Eval compute in get_write_value_out example_txn.
+
+Function compare_value (ls1: list value) (ls2: list value): bool:=
+  match ls1, ls2 with
+  | [], [] => true
+  | _ , [] => false
+  | [], _ => false
+  | h1::t1, h2::t2 => if h1=?h2 then compare_value t1 t2 else false
+  end.
+
+Function compare_write_list (ls1: list (nat * (list value))) (ls2:list (nat * (list value))): Prop :=
+  match ls1, ls2 with
+  | [], [] => True
+  | _ , [] => False
+  | [], _ => False
+  | (tid1, ver1)::t1, (tid2, ver2)::t2 
+        => if compare_value ver1 ver2 then compare_write_list t1 t2
+            else False
+  end.
+
+Definition write_synchronization trace1 trace2: Prop:=
+  compare_write_list (get_write_value_out trace1) (get_write_value_out trace2).
+
+Definition last_write_value trace: nat:=
+  trace_write_last (exec trace (seq_list trace)).
+
+Eval compute in last_write_value example_txn.
+(*
+Definition write_synchronization trace1 trace2: Prop:=
+  if (last_write_value trace1) =? (last_write_value trace2)
+  then True
+  else False.
+*)
+Eval compute in write_synchronization example_txn (create_serialized_trace example_txn (seq_list example_txn)).
+
+Lemma write_consistency trace:
+  sto_trace trace 
+  -> sto_trace (create_serialized_trace trace (seq_list trace))
+  -> is_serial_trace (create_serialized_trace trace (seq_list trace))
+  -> write_synchronization trace (create_serialized_trace trace (seq_list trace)).
+
+Proof.
+(*  intros.
+  induction H; simpl.
+  - unfold write_synchronization; unfold get_write_value_out; simpl; auto.
+  - unfold write_synchronization; unfold get_write_value_out; simpl.
+    assert (seq_list (create_serialized_trace ((tid0, start_txn) :: t) (seq_list t)) = seq_list t).
+    {
+      remember (start_txn) as action. 
+      apply seq_list_equal2. rewrite Heqaction. intuition. inversion H2.
+    }
+  rewrite H2.*)
+Admitted.
+
+Function tid_read_version (trace: trace) : list version :=
+  match trace with
+  | [] => []
+  | (_, read_item ver) :: tail => ver :: tid_read_version tail
+  | _ :: tail => tid_read_version tail
+  end.
+
+Function get_read_version (trace: trace) (tids: list nat) : list (nat * (list version)):=
+  match tids with
+  | [] => []
+  | head :: tail => (head, tid_read_version (trace_filter_tid head trace)) :: get_read_version trace tail
+  end.
+
+Definition get_read_version_out (trace: trace) : list (nat * (list version)) :=
+  get_read_version trace (seq_list trace).
+
+Eval compute in get_read_version_out example_txn.
+
+Eval compute in get_read_version_out example_txn2.
+
+Function compare_version (ls1: list version) (ls2: list version): bool:=
+  match ls1, ls2 with
+  | [], [] => true
+  | _ , [] => false
+  | [], _ => false
+  | h1::t1, h2::t2 => if h1=?h2 then compare_version t1 t2 else false
+  end.
+
+Function compare_read_list (ls1: list (nat * (list version))) (ls2:list (nat * (list version))): Prop :=
+  match ls1, ls2 with
+  | [], [] => True
+  | _ , [] => False
+  | [], _ => False
+  | (tid1, ver1)::t1, (tid2, ver2)::t2 
+        => if compare_version ver1 ver2 then compare_read_list t1 t2
+            else False
+  end.
+
+Definition read_synchronization trace1 trace2: Prop:=
+  compare_read_list (get_read_version_out trace1) (get_read_version_out trace2).
+
+Eval compute in read_synchronization example_txn (create_serialized_trace example_txn (seq_list example_txn)).
+
+Eval compute in compare_read_list [(1, [0;0]); (2, [1;1])] [(1, [0]);(2, [1;1])].
+    
+Lemma read_consistency trace:
+  sto_trace trace 
+  -> sto_trace (create_serialized_trace trace (seq_list trace))
+  -> is_serial_trace (create_serialized_trace trace (seq_list trace))
+  -> read_synchronization trace (create_serialized_trace trace (seq_list trace)).
+Admitted.
+
+Definition Exec_Equivalence trace1 trace2: Prop:=
+  write_synchronization trace1 trace2 /\ read_synchronization trace1 trace2.
+
+Eval compute in Exec_Equivalence example_txn (create_serialized_trace example_txn (seq_list example_txn)).
+
+Theorem txn_equal t:
+  sto_trace t
+  -> exists t', sto_trace t'
+  -> is_serial_trace t'
+  -> Exec_Equivalence t t'.
+Proof.
+  exists (create_serialized_trace t (seq_list t)).
+  intros.
+  unfold Exec_Equivalence. split.
+  apply write_consistency; auto.
+  apply read_consistency; auto.
+Qed.
+  
