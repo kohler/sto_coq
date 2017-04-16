@@ -1,10 +1,12 @@
 Theorem 12 is the meat, but you need prior definitions and lemmas to understand it.
 
-Definition 1 (Committed trace): A committed trace t' of a trace t is the trace that is obtained by filtering out all operations belonging to transactions that do not have a serialization point in t.
+Definition 1 (Committed trace): A committed trace t' of a trace t is the trace that is obtained by 
+filtering out all operations belonging to transactions that do not have a serialization point in t.
 
 Definition 2 (Serial trace): A serial trace is a trace where all actions belonging to the same transactions are grouped together. 
 
-Definition 3 (Serialized trace):  A serialized trace t' of a trace t is t's committed trace reordered by grouping together actions of the same transaction in the order of the serialization points.
+Definition 3 (Serialized trace):  A serialized trace t' of a trace t is t's committed trace reordered by 
+grouping together actions of the same transaction in the order of the serialization points.
 
 Lemma 4: If t is a valid STO trace, then its serialized trace t' is a valid STO trace.
 
@@ -24,7 +26,7 @@ Definition 10 (Write Synchornization): Two traces t and t' are write-synchornize
 
 Definition 11 (Trace equivalence): Two traces t and t' are equivalent if they are read-synchornized and write-synchornized.
 
-(* To make the proof easy, we can add more lemmas. *)
+(* To make the proof go through easier, we can add more lemmas. *)
 Theorem 12 (Serialized Trace Equivalence): If t is a STO trace, the serialized trace t' of t is equivalent to t.
 Proof:
   Base case: empty trace []
@@ -42,3 +44,4 @@ Proof.
   By Lemma 4, t' is a sto trace.
   By Lemma 5, t' is a serial trace.
 Qed.
+
