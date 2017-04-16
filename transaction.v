@@ -99,7 +99,7 @@ Inductive action:=
 |commit_txn: version -> action
 |seq_point: action.
 (*|obtain_global_tid: action.*)
-(*sp later than last lock*)
+(*sp later than last lock, but must before the first commit*)
 Definition trace := list (tid * action).
 
 (*
@@ -135,7 +135,7 @@ Definition trace_filter_read tr: trace :=
                       end) tr.
 
 (*
-Returns all commit actions in the trace. (for commit version update)
+Returns all commit & complete_write actions in the trace for updating commit version
 *)
 Definition trace_filter_commit_complete tr: trace :=
     filter (fun pr => match snd pr with
@@ -156,7 +156,7 @@ Returns the version number of the last commit
 If there is no commit in the trace, returns 0.
 *)
 Definition trace_commit_last t: version :=
-  match hd dummy (map snd (trace_filter_commit t)) with 
+  match hd dummy (map snd (trace_filter_commit t)) with
 	| commit_txn n => n
 	| _ => 0
   end.
@@ -166,7 +166,7 @@ Returns the value of the last write
 If there is no write in the trace, returns 0.
 *)
 Definition trace_write_last t: value :=
-  match hd dummy (map snd (trace_filter_write t)) with 
+  match hd dummy (map snd (trace_filter_write t)) with
 	| write_item n => n
 	| _ => 0
   end.
@@ -176,7 +176,7 @@ Returns the version number of the last commit/complete_write
 If there is no commit in the trace, returns 0.
 *)
 Definition trace_commit_complete_last t: version :=
-  match hd dummy (map snd (trace_filter_commit_complete t)) with 
+  match hd dummy (map snd (trace_filter_commit_complete t)) with
 	| commit_txn n => n
   | complete_write_item n => n
 	| _ => 0
@@ -193,7 +193,7 @@ Definition trace_filter_lock tr: trace :=
 
 (*
 All commit and abort have unlock_write_item.
-Returns all 'unlock_write_item' actions in the trace.
+If a transaction contains either of the actions, the transaction has unlock
 *)
 Definition trace_filter_unlock tr: trace :=
     filter (fun pr => match snd pr with
@@ -202,6 +202,9 @@ Definition trace_filter_unlock tr: trace :=
                       | _ => false
                       end) tr.
 
+(*
+Returns the length of a trace
+*)
 Function length (tr: trace) : nat := 
   match tr with 
   | [] => 0
@@ -209,7 +212,8 @@ Function length (tr: trace) : nat :=
   end.
 
 (*
-Returns T if there exists lock_write_item
+Returns True if there exists no lock_write_item
+Returns False if there exists locks
 *)
 Definition check_lock_or_unlock tr: Prop :=
   match 
@@ -218,6 +222,7 @@ Definition check_lock_or_unlock tr: Prop :=
 	| true => True
 	| false => False
   end.
+
 
 (*
 Returns true if an action is not a write action
@@ -247,14 +252,14 @@ Definition trace_no_writes tid t: Prop :=
   Forall action_no_write (map snd (trace_filter_tid tid t)).
 
 (*
-Returns true if the transaction tid's trace has no writes
+Returns true if the transaction tid's trace has no commits
 Returns false otherwise.
 *)
 Definition trace_no_commits tid t: Prop :=
   Forall action_no_commit (map snd (trace_filter_tid tid t)).
 
 (*
-Returns all read_item actions in a trace of a particular transaction.
+Returns all read_item versions in a trace of a particular transaction.
 *)
 Function read_versions tr: list version :=
   match tr with
@@ -264,7 +269,7 @@ Function read_versions tr: list version :=
   end.
 
 (*
-Returns all read_item actions of tid in a trace tr.
+Returns all read_item versions of tid in a trace tr.
 *)
 Definition read_versions_tid tid tr: list version :=
   read_versions (map snd (trace_filter_tid tid tr)).
@@ -279,6 +284,7 @@ Function check_version (vs : list version) (v : version) : Prop :=
   | hd :: tail => if hd =? v then check_version tail v
                   else False
   end.
+
 (*
 Returns all start/read/write actions in the trace.
 *)
@@ -294,6 +300,7 @@ Definition trace_filter_startreadwrite tid tr: trace :=
 (*
 Returns all newtid with start/read/write actions in the trace.
 *)
+(*
 Function trace_rollback (newtid: nat) (newver: version) (tr:trace): trace :=
     match tr with 
     | [] => []
@@ -305,6 +312,7 @@ Function trace_rollback (newtid: nat) (newver: version) (tr:trace): trace :=
       => [(newtid, start_txn)] ++ trace_rollback newtid newver tr'
     | _ :: tr' => trace_rollback newtid newver tr'
   end.
+*)
 
 Inductive sto_trace : trace -> Prop :=
 
@@ -660,6 +668,12 @@ Definition example_txn:=
 Definition example_txn2:=
 [(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
 
+(*
+Returns the serialized sequence of transactions in the STO trace based on seq_point of each transaction
+The first element (tid) of the sequence is the first transaction that completes in the serial trace
+Note that STO-trace is constructed in a reverse order: the first (tid * action) pair is the last operation in the trace
+*)
+
 Function seq_list (sto_trace: trace): list nat:=
   match sto_trace with
   | [] => []
@@ -671,6 +685,11 @@ Eval compute in seq_list example_txn.
 
 Eval compute in seq_list example_txn2.
 
+(*
+This function creates a serialized trace.
+Just like STO-trace, the order is reversed: that is, the first (tid*action) pair in the serial trace
+constructed by this function is the last operation performed in this trace
+*)
 Function create_serialized_trace (sto_trace: trace) (seqls : list nat): trace:=
   match seqls with
   | [] => []
@@ -682,18 +701,31 @@ Eval compute in create_serialized_trace example_txn (seq_list example_txn).
 
 Eval compute in create_serialized_trace example_txn2 (seq_list example_txn2).
 
+(*
+This lemma proves that the seq_point of each transaction in a STO-trace determines its serialized order in the serial trace
+*)
 Lemma seq_list_equal tid action trace:
   action = seq_point <->
   seq_list (create_serialized_trace ((tid, action) :: trace) (seq_list trace)) = seq_list trace ++ [tid].
 Proof.
 Admitted.
 
+(*
+This lemma proves that the sequences of other actions in each transaction in a STO-trace does not
+affect its order in the serial trace
+*)
 Lemma seq_list_equal2 tid action trace:
   ~(action = seq_point) ->
   seq_list (create_serialized_trace ((tid, action) :: trace) (seq_list trace)) = seq_list trace.
 Proof.
 Admitted.
 
+(*
+The function checks if a trace is a serial trace by making sure that
+tid is only increaing as we traverse the trace
+In this function, we assume that the trace is in the correct order.
+That is, the first (tid*action) in the trace is actually the first one that gets to be executed
+*)
 Function check_is_serial_trace (tr: trace) (maxtid: nat): Prop :=
   match tr with 
   | [] => True
@@ -709,12 +741,19 @@ Eval compute in is_serial_trace [(3, commit_txn 1); (3, seq_point); (3, validate
 
 Eval compute in is_serial_trace [(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
 
+(*
+Check whether an element a is in the list l
+*)
 Fixpoint In_bool (a:nat) (l:list nat) : bool :=
   match l with
     | [] => false
     | b :: m => (b =? a) || In_bool a m
   end.
 
+(*
+This function executes STO trace in the reverse order
+The goal is to record all read and write actions of all *committed* transactions
+*)
 Function exec (sto_trace: trace) (commit_tid: list nat) : list (tid * action) :=
   match sto_trace with
   | [] => []
@@ -729,6 +768,9 @@ Function exec (sto_trace: trace) (commit_tid: list nat) : list (tid * action) :=
 
 Eval compute in exec example_txn (seq_list example_txn).
 
+(*
+This function returns all values that is written in a trace to a memory location
+*)
 Function tid_write_value (trace: trace) : list value :=
   match trace with
   | [] => []
@@ -736,17 +778,27 @@ Function tid_write_value (trace: trace) : list value :=
   | _ :: tail => tid_write_value tail
   end.
 
+(*
+This function returns a list of pair that records write values of each tids in the trace
+the first element in a pair is tid
+the second element is all the write values written by the transaction with the id tid
+*)
 Function get_write_value (trace: trace) (tids: list nat) : list (nat * (list value)):=
   match tids with
   | [] => []
   | head :: tail => (head, tid_write_value (trace_filter_tid head trace)) :: get_write_value trace tail
   end.
 
+
 Definition get_write_value_out (trace: trace) : list (nat * (list value)) :=
   get_write_value trace (seq_list trace).
 
 Eval compute in get_write_value_out example_txn.
 
+(*
+This function compares values in two lists one by one
+The value at each position in one list should be the same as that in the other list
+*)
 Function compare_value (ls1: list value) (ls2: list value): bool:=
   match ls1, ls2 with
   | [], [] => true
@@ -755,6 +807,14 @@ Function compare_value (ls1: list value) (ls2: list value): bool:=
   | h1::t1, h2::t2 => if h1=?h2 then compare_value t1 t2 else false
   end.
 
+(*
+We compare writes of two traces in this function
+If they have the same write sequence, then the function will return True
+****************************************************
+We assume that two traces have the same tids in the same sequence
+Should we actually add tid1 =? tid2 in the code to remove this assumption?
+****************************************************
+*)
 Function compare_write_list (ls1: list (nat * (list value))) (ls2:list (nat * (list value))): Prop :=
   match ls1, ls2 with
   | [], [] => True
@@ -768,6 +828,9 @@ Function compare_write_list (ls1: list (nat * (list value))) (ls2:list (nat * (l
 Definition write_synchronization trace1 trace2: Prop:=
   compare_write_list (get_write_value_out trace1) (get_write_value_out trace2).
 
+(*
+The function returns the last write value of a STO-trace
+*)
 Definition last_write_value trace: nat:=
   trace_write_last (exec trace (seq_list trace)).
 
@@ -780,6 +843,13 @@ Definition write_synchronization trace1 trace2: Prop:=
 *)
 Eval compute in write_synchronization example_txn (create_serialized_trace example_txn (seq_list example_txn)).
 
+(*
+A STO-trace and its serial trace should have the same writes.
+**************************************************
+Should we prove that create_serialized_trace function actually prove the correct serial trace of the
+STO-trace
+**************************************************
+*)
 Lemma write_consistency trace:
   sto_trace trace 
   -> sto_trace (create_serialized_trace trace (seq_list trace))
@@ -799,6 +869,13 @@ Proof.
   rewrite H2.*)
 Admitted.
 
+(*
+Now we proceed to the read part of the proof.
+*)
+
+(*
+This function returns the version numbers of all the reads in a trace
+*)
 Function tid_read_version (trace: trace) : list version :=
   match trace with
   | [] => []
@@ -806,6 +883,12 @@ Function tid_read_version (trace: trace) : list version :=
   | _ :: tail => tid_read_version tail
   end.
 
+(*
+This function groups all versions of reads of a transaction in a trace.
+This returns a list of pairs
+The first element of a pair is the tid
+The second element is a list of all versions of the reads from the transaction tid
+*)
 Function get_read_version (trace: trace) (tids: list nat) : list (nat * (list version)):=
   match tids with
   | [] => []
@@ -819,6 +902,10 @@ Eval compute in get_read_version_out example_txn.
 
 Eval compute in get_read_version_out example_txn2.
 
+(*
+This function compares all read versions of two list
+This is the same as compare all write in previous functions
+*)
 Function compare_version (ls1: list version) (ls2: list version): bool:=
   match ls1, ls2 with
   | [], [] => true
@@ -843,7 +930,10 @@ Definition read_synchronization trace1 trace2: Prop:=
 Eval compute in read_synchronization example_txn (create_serialized_trace example_txn (seq_list example_txn)).
 
 Eval compute in compare_read_list [(1, [0;0]); (2, [1;1])] [(1, [0]);(2, [1;1])].
-    
+
+(*
+A STO-trace and its serial trace should have the same reads.
+*)
 Lemma read_consistency trace:
   sto_trace trace 
   -> sto_trace (create_serialized_trace trace (seq_list trace))
@@ -851,11 +941,17 @@ Lemma read_consistency trace:
   -> read_synchronization trace (create_serialized_trace trace (seq_list trace)).
 Admitted.
 
+(*
+Two traces can be considered equivalent in execution if they produce the same reads and writes
+*)
 Definition Exec_Equivalence trace1 trace2: Prop:=
   write_synchronization trace1 trace2 /\ read_synchronization trace1 trace2.
 
 Eval compute in Exec_Equivalence example_txn (create_serialized_trace example_txn (seq_list example_txn)).
 
+(*
+The capstone theorem: prove serializability of a sto-trace
+*)
 Theorem txn_equal t:
   sto_trace t
   -> exists t', sto_trace t'
