@@ -669,12 +669,6 @@ Definition example_txn:=
 Definition example_txn2:=
 [(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
 
-Lemma sto_trace_app tid action t:
-  sto_trace ((tid, action) :: t) -> sto_trace t.
-Proof.
-  intros.
-  inversion H; subst; auto.
-Qed.
 (*
 Returns the serialized sequence of transactions in the STO trace based on seq_point of each transaction
 The first element (tid) of the sequence is the first transaction that completes in the serial trace
@@ -685,16 +679,7 @@ Function seq_list (sto_trace: trace): list nat:=
   match sto_trace with
   | [] => []
   | (tid, seq_point) :: tail => seq_list tail ++ [tid]
-  | (tid, dummy) :: tail => seq_list tail
-  | (tid, start_txn) :: tail => seq_list tail
-  | (tid, read_item n) :: tail => seq_list tail
-  | (tid, write_item n) :: tail => seq_list tail
-  | (tid, try_commit_txn) :: tail => seq_list tail
-  | (tid, lock_write_item) :: tail => seq_list tail
-  | (tid, validate_read_item b) :: tail => seq_list tail
-  | (tid, abort_txn) :: tail => seq_list tail
-  | (tid, complete_write_item n) :: tail => seq_list tail
-  | (tid, commit_txn n) :: tail => seq_list tail
+  | _ :: tail => seq_list tail
   end.
 
 Eval compute in seq_list example_txn.
@@ -719,78 +704,65 @@ Proof.
   apply in_or_app. right. simpl. auto.
 Qed.
 
-(***************************************************)
-Lemma seq_list_no_two_seqpoint t tid:
-  sto_trace ((tid, seq_point) :: t)
-  -> ~ In (tid, seq_point) t.
-Proof.
-  intros.
-  intuition.
-  inversion H; subst.
-  apply seq_list_seqpoint with (action0 := seq_point) in H.
-  
-Admitted.
-(***************************************************)
-
-
-Lemma trace_seqlist_seqpoint t tid:
-  In (tid, seq_point) t
-  -> In tid (seq_list t).
-Proof.
-  intros.
-  functional induction seq_list t.
-  inversion H.
-  destruct (Nat.eq_dec tid tid0); subst; apply in_or_app. 
-  right. simpl. auto.
-  left. apply IHl. apply in_inv in H. destruct H.
-  inversion H. apply Nat.eq_sym in H1. contradiction. auto.
-  all: destruct (Nat.eq_dec tid tid0); subst.
-  all: apply IHl; apply in_inv in H; destruct H; try inversion H; auto.
-Qed.
-
-Lemma trace_seqlist_seqpoint_rev t tid:
-  In tid (seq_list t)
+Lemma t_last_seqpoint t tid:
+  sto_trace t -> 
+  trace_tid_last tid t = seq_point 
   -> In (tid, seq_point) t.
 Proof.
   intros.
-  functional induction seq_list t.
-  inversion H.
-  destruct (Nat.eq_dec tid tid0); subst; apply in_app_or in H.
-  apply in_eq. apply in_cons.
-  destruct H. auto. simpl in H. destruct H. apply Nat.eq_sym in H.
-  contradiction. inversion H.
-  all: destruct (Nat.eq_dec tid tid0); subst; apply in_cons; auto.
-Qed.
-
-Lemma seq_list_last_tid_dummy tid t:
-  sto_trace t ->
-  In tid (seq_list t) ->
-  trace_tid_last tid t <> dummy.
-Proof.
-  intros ST; induction ST; intros.
-  all: cbn in *.
-  contradiction.
-  all: unfold trace_tid_last; simpl.
-  all: destruct (Nat.eq_dec tid0 tid);
-    [ subst; rewrite <- beq_nat_refl; cbn; discriminate | ].
-  all: apply Nat.eqb_neq in n; rewrite n.
-  all: try apply IHST in H0; auto.
-  apply in_app_or in H1.
-  destruct H1. apply IHST in H1; auto.
-  simpl in H1. destruct H1. apply Nat.eqb_neq in n. contradiction. inversion H1.
-Qed.
-
-(***************************************************)
-Lemma seq_list_last_tid_start_txn tid t:
-  sto_trace t ->
-  In tid (seq_list t) ->
-  trace_tid_last tid t <> start_txn.
-Proof.
+  unfold trace_tid_last in H0.
+  unfold trace_filter_tid in H0.
+  Search (filter).
+  inversion H; subst; try discriminate.
+  destruct (Nat.eq_dec tid tid0).
 Admitted.
-(***************************************************)
+
+Lemma seq_list_commit tid action n t:
+  sto_trace ((tid, action) :: t) ->
+  action = commit_txn n -> 
+  In tid (seq_list ((tid, action) :: t)).
+Proof.
+  intros. subst.
+  inversion H. 
+Admitted.
+
+(*
+This function creates a serialized trace.
+Just like STO-trace, the order is reversed: that is, the first (tid*action) pair in the serial trace
+constructed by this function is the last operation performed in this trace
+*)
+(*
+Function create_serialized_trace (sto_trace: trace) (seqls : list nat): trace:=
+  match seqls with
+  | [] => []
+  | head :: tail 
+    => create_serialized_trace sto_trace tail ++ trace_filter_tid head sto_trace
+  end.
+*)
+Function create_serialized_trace (sto_trace: trace) (sto_trace_copy: trace): trace:=
+  match sto_trace with
+  | [] => []
+  | (tid, seq_point) :: tail
+    => trace_filter_tid tid sto_trace_copy ++ create_serialized_trace tail sto_trace_copy
+  | _ :: tail => create_serialized_trace tail sto_trace_copy
+  end.
+
+Eval compute in create_serialized_trace example_txn example_txn.
+
+Eval compute in create_serialized_trace example_txn2 example_txn2.
+
+Lemma serial_le_sto_length tr:
+  sto_trace tr ->
+  length (create_serialized_trace tr tr) <= length tr.
+Proof.
+  intros. induction H.
+  simpl.  auto.
+  simpl.
+  inversion IHsto_trace.
+Admitted.
 
 
-Lemma seq_list_commit tid t:
+Lemma last_seq_point tid t:
   sto_trace t -> 
   trace_tid_last tid t = seq_point
   -> In tid (seq_list t).
@@ -837,143 +809,61 @@ Proof.
   apply beq_nat_refl. rewrite <- H2 in H3. simpl in H3. inversion H3.
   apply not_eq_sym in n. apply Nat.eqb_neq in n. rewrite n in H3. 
   apply IHsto_trace in H3. auto.
-  unfold trace_tid_last in H0. inversion H0.
-  destruct (Nat.eq_dec tid tid0); subst. 
-  apply in_or_app. right. simpl. auto.
-  apply not_eq_sym in n. apply Nat.eqb_neq in n. rewrite n in H4. 
-  apply IHsto_trace in H4. 
-  apply in_or_app. left. auto.
+  admit.
   unfold trace_tid_last in H0. inversion H0.
   destruct (Nat.eq_dec tid tid0); subst. assert (true = (tid0 =? tid0)).
   apply beq_nat_refl. rewrite <- H2 in H3. simpl in H3. inversion H3.
   apply not_eq_sym in n. apply Nat.eqb_neq in n. rewrite n in H3. 
   apply IHsto_trace in H3. auto.
-Qed.
-
-
-Lemma seq_point_before_commit (t:trace) (tid: tid) n:
-  sto_trace ((tid, commit_txn n) :: t) ->
-  In (tid, seq_point) t.
-Proof.
-  intros.
-  inversion H.
-  apply seq_list_commit in H2.
-  apply trace_seqlist_seqpoint_rev in H2.
-  auto. auto.
-Qed.
-
-(***************************************************)
-Lemma seq_point_before_commit2 t tid action:
-  sto_trace ((tid, action) :: t) ->
-  In (tid, seq_point) t ->
-  action = commit_txn (trace_commit_complete_last t).
-Proof.
-  intros.
-  inversion H; subst.
-  apply trace_seqlist_seqpoint in H0.
-  apply seq_list_last_tid_dummy in H0; auto; congruence.
-  repeat destruct or H4.
-  apply trace_seqlist_seqpoint in H0.
-  apply seq_list_last_tid_start_txn in H0; auto; congruence.
-  
-  
-(*  1-3: apply (seq_list_commit_rev) in H0; auto.
-
-  assert (In tid (seq_list ((tid, start_txn) :: t))). { simpl.  auto. }
-  *)
 Admitted.
-(***************************************************)
   
 
-(*
-Lemma seq_list_commit tid action n t:
-  sto_trace ((tid, action) :: t) ->
-  action = commit_txn n -> 
-  In tid (seq_list ((tid, action) :: t)).
-Proof.
-  intros. subst.
-  inversion H; subst.
-  apply trace_last_seqpoint in H. (*haven't proved*)
-  simpl. apply trace_seqlist_seqpoint. auto.
-Qed.
-*)
-
-(*
-This function creates a serialized trace.
-Just like STO-trace, the order is reversed: that is, the first (tid*action) pair in the serial trace
-constructed by this function is the last operation performed in this trace
-*)
-(*
-Function create_serialized_trace (sto_trace: trace) (seqls : list nat): trace:=
-  match seqls with
-  | [] => []
-  | head :: tail 
-    => create_serialized_trace sto_trace tail ++ trace_filter_tid head sto_trace
-  end.
-*)
-Function create_serialized_trace (sto_trace: trace) (sto_trace_copy: trace): trace:=
-  match sto_trace with
-  | [] => []
-  | (tid, seq_point) :: tail
-    => trace_filter_tid tid sto_trace_copy ++ create_serialized_trace tail sto_trace_copy
-  | _ :: tail => create_serialized_trace tail sto_trace_copy
-  end.
-
-Eval compute in create_serialized_trace example_txn example_txn.
-
-Eval compute in create_serialized_trace example_txn2 example_txn2.
-
-Lemma seq_list_action tid action t:
+Lemma seq_list_action tid action n t:
   sto_trace ((tid, action) :: t) -> 
-  action = seq_point \/ action = commit_txn (trace_commit_complete_last t)
+  action = seq_point \/ action = commit_txn n
   <-> In tid (seq_list ((tid, action) :: t)).
 Proof.
-  split.
-  intros. destruct H0.
-  apply seq_list_seqpoint; auto.
-  subst. inversion H; subst.
-  simpl. apply seq_list_commit; auto.
-  
-  intros.
-  apply trace_seqlist_seqpoint_rev in H0.
-  apply in_inv in H0.
-  destruct H0.
-  inversion H0. left. auto.
-  apply seq_point_before_commit2 with (action0 := action) in H0.
-  right. auto. 
-  apply sto_trace_app with (tid0 := tid) (action0 := action).
-  auto. auto.
-Qed.
+  intros. split. intros. destruct H0.
+  rewrite H0. simpl. apply in_or_app. right. simpl. auto.
+  rewrite H0 in *. 
+  inversion H.
+  simpl.
+  apply last_seq_point; auto.
+  admit.
+Admitted.
 
-
-Lemma seq_list_action_neg tid action t:
+Lemma seq_list_action_neg tid action n t:
   sto_trace ((tid, action) :: t) -> 
-  action <> seq_point /\ action <> commit_txn (trace_commit_complete_last t)
+  action <> seq_point /\ action <> commit_txn n
   <-> ~ In tid (seq_list ((tid, action) :: t)).
 Proof.
   intros. split. 
   intros. 
   intuition.
-  apply seq_list_action in H .
+  apply seq_list_action with (n := n) in H .
   destruct H. apply H0 in H1. destruct H1; auto.
   intros.
   intuition.
-  apply seq_list_action in H .
+  apply seq_list_action with (n := n) in H .
   destruct H.
-  assert (action = seq_point \/ action = commit_txn (trace_commit_complete_last t)). { left. auto. }
+  assert (action = seq_point \/ action = commit_txn n). { left. auto. }
   apply H in H3. auto.
-  apply seq_list_action in H .
+  apply seq_list_action with (n := n) in H .
   destruct H.
-  assert (action = seq_point \/ action = commit_txn (trace_commit_complete_last t)). { right. auto. }
+  assert (action = seq_point \/ action = commit_txn n). { right. auto. }
   apply H in H3. auto.
 Qed.
-(*
+
+Lemma abort_not_in tr:
+  sto_trace ((tid, action) :: t) ->
+  action = abort_txn ->
+  ~ In tid (seq_list ((tid, action) :: t)).
 
 Lemma serial_action tid action n t:
   sto_trace ((tid, action) :: t) ->
   action <> seq_point /\ action <> commit_txn n
-  -> create_serialized_trace ((tid, action) :: t) (seq_list ((tid, action) :: t)) = 
-     create_serialized_trace t (seq_list t).
+  -> create_serialized_trace ((tid, action) :: t) ((tid, action) :: t) = 
+     create_serialized_trace t t.
 Proof.
   intros.
   inversion H; subst.
@@ -999,40 +889,28 @@ Proof.
 *)
   
 Admitted.
-*)
+
 (*
 This lemma proves that the seq_point of each transaction in a STO-trace determines its serialized order in the serial trace
 *)
 
-(***************************************************)
 Lemma seq_list_equal trace:
   sto_trace trace -> 
-  seq_list (create_serialized_trace trace trace) = seq_list trace.
+  seq_list (create_serialized_trace (trace) (trace)) = seq_list trace.
 Proof.
   intros. simpl.
   induction H.
-  functional induction (create_serialized_trace trace trace).
-  simpl. auto.
-  all: try rewrite IHsto_trace; simpl; auto.
-  - rewrite IHsto_trace. simpl. auto.
-  - rewrite IHsto_trace. simpl. auto.
-  - rewrite IHsto_trace. simpl. auto.
-  - rewrite IHsto_trace. simpl. auto.
-  - rewrite IHsto_trace. simpl. auto.
-  - rewrite IHsto_trace. simpl. auto.
-  - rewrite IHsto_trace. simpl. auto.
-  - apply seq_point_step with (ver:= ver) in H0; [idtac | auto | auto]. 
-    apply seq_list_seqpoint in H0. simpl in *.
-    
+  - simpl. auto.
+  - simpl. assert (trace_tid_last tid0 t <> seq_point).
+    rewrite H. intuition. inversion H1.
     
 Admitted.
-(***************************************************)
 
-(*
+
 Lemma seq_list_equal_old tid action trace:
   sto_trace trace -> 
   (action = seq_point <->
-  seq_list (create_serialized_trace ((tid, action) :: trace) (seq_list ((tid, action) :: trace))) = seq_list trace ++ [tid]).
+  seq_list (create_serialized_trace ((tid, action) :: trace) ((tid, action) :: trace)) = seq_list trace ++ [tid]).
 Proof.
   split.
   intros. subst. 
@@ -1046,10 +924,9 @@ affect its order in the serial trace
 *)
 Lemma seq_list_equal2 tid action trace:
   ~(action = seq_point) ->
-  seq_list (create_serialized_trace ((tid, action) :: trace) (seq_list trace)) = seq_list trace.
+  seq_list (create_serialized_trace ((tid, action) :: trace) trace) = seq_list trace.
 Proof.
 Admitted.
-*)
 
 (*
 Check whether an element a is in the list l
@@ -1060,52 +937,20 @@ Fixpoint In_bool (a:nat) (l:list nat) : bool :=
     | b :: m => (b =? a) || In_bool a m
   end.
 
-Fixpoint does_not_contain_tid tid (tr:trace) : Prop :=
-  match tr with
-  | [] => True
-  | (tid', _) :: rest => tid <> tid' /\ does_not_contain_tid tid rest
-  end.
-
 (*
 The function checks if a trace is a serial trace by making sure that
 tid is only increaing as we traverse the trace
 In this function, we assume that the trace is in the correct order.
 That is, the first (tid*action) in the trace is actually the first one that gets to be executed
 *)
-Function check_is_serial_trace (tr: trace) : Prop :=
+Function check_is_serial_trace (tr: trace) (tidls: list nat): Prop :=
   match tr with 
   | [] => True
-  | (tid, x) :: rest =>
-    match rest with
-    | [] => True
-    | (tid', y) :: _ => (tid = tid' \/ does_not_contain_tid tid rest)
-                        /\ check_is_serial_trace rest
-    end
-  end.
-
-  | [(tid, _)] => True
-  | (tid, x) :: (tid', y) :: tail =>
-    if tid =? tid'
-    then check_is_serial_trace ((tid', y) :: tail)
-    else does_not_contain_tid tid tail
-         /\ check_is_serial_trace ((tid', y) :: tail)
-  end.
-
-    then check
   | (tid, _) :: tail => if (negb (tid =? (hd 0 tidls))) && (In_bool tid tidls)
                           then False
                           else check_is_serial_trace tail (tid :: tidls)
   end.
 
-(***************************************************)
-Lemma check_split tr1 tr2: 
-  check_is_serial_trace tr1 [] 
-  -> check_is_serial_trace tr2 []
-  -> check_is_serial_trace (tr1 ++ tr2) [].
-Proof.
-Admitted.
-(***************************************************)
-  
 Definition is_serial_trace tr: Prop :=
   check_is_serial_trace tr [].
 
@@ -1115,20 +960,17 @@ Eval compute in is_serial_trace [(3, commit_txn 1); (3, seq_point); (3, validate
 
 Eval compute in is_serial_trace example_txn.
 
-(***************************************************)
 Lemma is_serial trace:
   is_serial_trace (create_serialized_trace trace trace).
 Proof.
-  unfold is_serial_trace. 
-  functional induction create_serialized_trace trace trace;
-  [ simpl; auto | idtac | auto ].
-  apply check_split; [idtac | auto].
-  unfold trace_filter_tid.
-  unfold check_is_serial_trace.
-  simpl.
+  unfold is_serial_trace.
+  induction trace.
+  simpl. auto.
+  functional induction create_serialized_trace trace trace.
+  simpl. auto.
+  
+  
 Admitted.
-(***************************************************)
-
 
 (*
 This function executes STO trace in the reverse order
@@ -1221,7 +1063,7 @@ Definition write_synchronization trace1 trace2: Prop:=
   then True
   else False.
 *)
-Eval compute in write_synchronization example_txn (create_serialized_trace example_txn (seq_list example_txn)).
+Eval compute in write_synchronization example_txn (create_serialized_trace example_txn example_txn).
 
 (*
 A STO-trace and its serial trace should have the same writes.
@@ -1230,28 +1072,25 @@ Should we prove that create_serialized_trace function actually prove the correct
 STO-trace
 **************************************************
 *)
-
-(***************************************************)
 Lemma write_consistency trace:
   sto_trace trace 
-  -> sto_trace (create_serialized_trace trace (seq_list trace))
-  -> is_serial_trace (create_serialized_trace trace (seq_list trace))
-  -> write_synchronization trace (create_serialized_trace trace (seq_list trace)).
+  -> sto_trace (create_serialized_trace trace trace)
+  -> is_serial_trace (create_serialized_trace trace trace)
+  -> write_synchronization trace (create_serialized_trace trace trace).
 
 Proof.
   intros.
   induction H.
   - unfold write_synchronization; unfold get_write_value_out; simpl; auto.
   - unfold write_synchronization. unfold get_write_value_out.
-    assert (seq_list (create_serialized_trace ((tid0, start_txn) :: t) (seq_list ((tid0, start_txn) :: t))) = seq_list t).
+    assert (seq_list (create_serialized_trace ((tid0, start_txn) :: t) ((tid0, start_txn) :: t)) = seq_list t).
     {
       remember (start_txn) as action. 
-      apply seq_list_equal2. rewrite Heqaction. intuition. inversion H2. 
+      (*apply seq_list_equal2. rewrite Heqaction. intuition. inversion H2.*) 
     }
   
   rewrite H3.
 Admitted.
-(***************************************************)
 
 (*
 Now we proceed to the read part of the proof.
@@ -1311,22 +1150,19 @@ Function compare_read_list (ls1: list (nat * (list version))) (ls2:list (nat * (
 Definition read_synchronization trace1 trace2: Prop:=
   compare_read_list (get_read_version_out trace1) (get_read_version_out trace2).
 
-Eval compute in read_synchronization example_txn (create_serialized_trace example_txn (seq_list example_txn)).
+Eval compute in read_synchronization example_txn (create_serialized_trace example_txn example_txn).
 
 Eval compute in compare_read_list [(1, [0;0]); (2, [1;1])] [(1, [0]);(2, [1;1])].
 
 (*
 A STO-trace and its serial trace should have the same reads.
 *)
-
-(***************************************************)
 Lemma read_consistency trace:
   sto_trace trace 
-  -> sto_trace (create_serialized_trace trace (seq_list trace))
-  -> is_serial_trace (create_serialized_trace trace (seq_list trace))
-  -> read_synchronization trace (create_serialized_trace trace (seq_list trace)).
+  -> sto_trace (create_serialized_trace trace trace)
+  -> is_serial_trace (create_serialized_trace trace trace)
+  -> read_synchronization trace (create_serialized_trace trace trace).
 Admitted.
-(***************************************************)
 
 (*
 Two traces can be considered equivalent in execution if they produce the same reads and writes
@@ -1334,7 +1170,7 @@ Two traces can be considered equivalent in execution if they produce the same re
 Definition Exec_Equivalence trace1 trace2: Prop:=
   write_synchronization trace1 trace2 /\ read_synchronization trace1 trace2.
 
-Eval compute in Exec_Equivalence example_txn (create_serialized_trace example_txn (seq_list example_txn)).
+Eval compute in Exec_Equivalence example_txn (create_serialized_trace example_txn example_txn).
 
 (*
 The capstone theorem: prove serializability of a sto-trace
@@ -1345,7 +1181,7 @@ Theorem txn_equal t:
   -> is_serial_trace t'
   -> Exec_Equivalence t t'.
 Proof.
-  exists (create_serialized_trace t (seq_list t)).
+  exists (create_serialized_trace t t).
   intros. 
   unfold Exec_Equivalence. split.
   apply write_consistency; auto.

@@ -789,17 +789,22 @@ Proof.
 Admitted.
 (***************************************************)
 
+Ltac remove_unrelevant_last_txn :=
+  match goal with
+  | [H: context[trace_tid_last ?tid ((?tid0, _) :: ?t) = _] |-_] =>
+      unfold trace_tid_last in H; inversion H;
+      destruct (Nat.eq_dec tid tid0); subst
+end.
 
 Lemma seq_list_commit tid t:
   sto_trace t -> 
   trace_tid_last tid t = seq_point
   -> In tid (seq_list t).
 Proof.
+  Search map.
   intros.
   induction H; simpl; try discriminate.
-  unfold trace_tid_last in H0. inversion H0.
-  destruct (Nat.eq_dec tid tid0); subst. assert (true = (tid0 =? tid0)).
-  apply beq_nat_refl. rewrite <- H2 in H3. simpl in H3. inversion H3.
+  remove_unrelevant_last_txn. rewrite <- beq_nat_refl in H3. simpl in H3. inversion H3.
   apply not_eq_sym in n. apply Nat.eqb_neq in n. rewrite n in H3. 
   apply IHsto_trace in H3. auto.
   unfold trace_tid_last in H0. inversion H0.
@@ -849,7 +854,6 @@ Proof.
   apply not_eq_sym in n. apply Nat.eqb_neq in n. rewrite n in H3. 
   apply IHsto_trace in H3. auto.
 Qed.
-
 
 Lemma seq_point_before_commit (t:trace) (tid: tid) n:
   sto_trace ((tid, commit_txn n) :: t) ->
