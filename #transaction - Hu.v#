@@ -326,9 +326,7 @@ Inductive sto_trace : trace -> Prop :=
 | empty_step : sto_trace []
 
 | start_txn_step: forall t tid, 
-    (*trace_tid_last tid t = dummy*)
-    (* this tid doesn’t have start_txn*)
-    trace_filter_tid tid t = []
+    trace_tid_last tid t = dummy (* this tid doesn’t have start_txn*)
     -> sto_trace t
     -> sto_trace ((tid, start_txn)::t)
 
@@ -848,7 +846,6 @@ Proof.
   apply Forall_inv in H7. simpl in H7. auto.
 Qed.
 
-(* useless lemma
 Lemma seq_list_last_tid_dummy tid t:
   sto_trace t ->
   In tid (seq_list t) ->
@@ -866,24 +863,13 @@ Proof.
   destruct H1. apply IHST in H1; auto.
   simpl in H1. destruct H1. apply Nat.eqb_neq in n. contradiction. inversion H1.
 Qed.
-*)
+
 (***************************************************)
 Lemma seq_list_last_tid_start_txn tid t:
   sto_trace t ->
   In tid (seq_list t) ->
   trace_tid_last tid t <> start_txn.
 Proof.
-  intros ST; induction ST; intros.
-  all: cbn in *.
-  contradiction.
-  all: unfold trace_tid_last; simpl;
-  destruct (Nat.eq_dec tid0 tid); [subst |].
-  apply trace_seqlist_seqpoint_rev in H0.
-  apply in_split in H0. destruct H0. destruct H0
-  rewrite H0 in H. rewrite trace_filter_tid_app in H; simpl in H; try rewrite <- beq_nat_refl in H; try apply app_eq_nil in H; try destruct H; try inversion H1.
-  all: apply trace_seqlist_seqpoint in H0. apply IHST in H0. unfold trace_tid_last in H0.
-  apply Nat.eqb_neq in n; rewrite n. auto.
-  inversion ST.
 Admitted.
 (***************************************************)
 
@@ -999,7 +985,7 @@ Proof.
   destruct H0.
   inversion H0. left. auto.
   apply seq_point_before_commit2 with (action0 := action) in H0.
-  right. auto. auto.
+  right. auto. auto. 
 Qed.
 
 
@@ -1024,6 +1010,19 @@ Proof.
   assert (action = seq_point \/ action = commit_txn (trace_commit_complete_last t)). { right. auto. }
   apply H in H3. auto.
 Qed.
+
+(*
+Lemma seq_list_commit tid action n t:
+  sto_trace ((tid, action) :: t) ->
+  action = commit_txn n -> 
+  In tid (seq_list ((tid, action) :: t)).
+Proof.
+  intros. subst.
+  inversion H; subst.
+  apply trace_last_seqpoint in H. (*haven't proved*)
+  simpl. apply trace_seqlist_seqpoint. auto.
+Qed.
+*)
 
 (*
 This function creates a serialized trace.
