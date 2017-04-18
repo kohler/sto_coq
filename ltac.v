@@ -43,3 +43,24 @@ Proof.
   inversion H. apply Nat.eq_sym in H1. contradiction. auto.
   all: destruct (Nat.eq_dec tid tid0); subst; apply IHl; apply in_inv in H; destruct H; try inversion H; auto.
 Qed.
+
+Lemma seq_list_no_two_seqpoint t tid:
+  sto_trace ((tid, seq_point) :: t)
+  -> ~ In (tid, seq_point) t.
+Proof.
+  intros.
+  assert (sto_trace t). { apply sto_trace_app with (tid0 := tid) (action0 := seq_point). auto. }
+  inversion H.
+  intuition.
+
+  all: unfold trace_no_seq_points in H4; apply in_split in H6;
+  destruct H6; destruct H6;
+  rewrite H6 in H4; simpl in H4;
+  rewrite trace_filter_tid_app in H4;
+  simpl in H4;
+  rewrite <-beq_nat_refl in H4;
+  rewrite map_app in H4;
+  rewrite Forall_app in H4;
+  destruct H4; simpl in H7;
+  apply Forall_inv in H7; simpl in H7; auto.
+Qed.
