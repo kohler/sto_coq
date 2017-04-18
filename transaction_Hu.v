@@ -759,8 +759,7 @@ Proof.
   right. simpl. auto.
   left. apply IHl. apply in_inv in H. destruct H.
   inversion H. apply Nat.eq_sym in H1. contradiction. auto.
-  all: destruct (Nat.eq_dec tid tid0); subst.
-  all: apply IHl; apply in_inv in H; destruct H; try inversion H; auto.
+  all: destruct (Nat.eq_dec tid tid0); subst; apply IHl; apply in_inv in H; destruct H; try inversion H; auto.
 Qed.
 
 Lemma trace_seqlist_seqpoint_rev t tid:
@@ -876,17 +875,38 @@ Proof.
   intros ST; induction ST; intros.
   all: cbn in *.
   contradiction.
-  all: unfold trace_tid_last; simpl;
-  destruct (Nat.eq_dec tid0 tid); [subst |].
+  all: unfold trace_tid_last; simpl; destruct (Nat.eq_dec tid0 tid); [subst |].
   apply trace_seqlist_seqpoint_rev in H0.
-  apply in_split in H0. destruct H0. destruct H0
-  rewrite H0 in H. rewrite trace_filter_tid_app in H; simpl in H; try rewrite <- beq_nat_refl in H; try apply app_eq_nil in H; try destruct H; try inversion H1.
-  all: apply trace_seqlist_seqpoint in H0. apply IHST in H0. unfold trace_tid_last in H0.
+  apply in_split in H0. destruct H0. destruct H0.
+  rewrite H0 in H. rewrite trace_filter_tid_app in H. simpl in H.
+  rewrite <- beq_nat_refl in H. apply app_eq_nil in H. destruct H.
+  inversion H1.
+  apply IHST in H0. unfold trace_tid_last in H0.
   apply Nat.eqb_neq in n; rewrite n. auto.
-  inversion ST.
-Admitted.
+
+  all: try rewrite <- beq_nat_refl; simpl; try congruence.
+  all: apply Nat.eqb_neq in n; rewrite n; try apply IHST in H1; auto.
+  
+  apply Nat.eqb_neq in n. apply in_app_or in H1. destruct H1.
+  apply IHST in H1; auto.
+  simpl in H1. destruct H1. congruence. contradiction.
+Qed.
 (***************************************************)
 
+Ltac remove_unrelevant_last_txn :=
+  repeat match goal with
+  | [H: context[trace_tid_last ?tid ((?tid0, _) :: ?t) = _] |-_] =>
+      unfold trace_tid_last in H; inversion H;
+      destruct (Nat.eq_dec tid tid0); subst
+  | [H: context[hd _
+       (map snd
+          (if ?tid0 =? ?tid0
+           then (?tid0, ?x) :: trace_filter_tid ?tid0 ?t
+           else trace_filter_tid ?tid0 ?t)) = ?y] |-_] =>
+      rewrite <- beq_nat_refl in H; simpl in H; inversion H
+  | [H: context[?tid <> ?tid0] |-_] =>
+      apply not_eq_sym in H; apply Nat.eqb_neq in H
+end.
 
 Lemma seq_list_commit tid t:
   sto_trace t -> 
@@ -895,57 +915,14 @@ Lemma seq_list_commit tid t:
 Proof.
   intros.
   induction H; simpl; try discriminate.
-  unfold trace_tid_last in H0. inversion H0.
-  destruct (Nat.eq_dec tid tid0); subst. assert (true = (tid0 =? tid0)).
-  apply beq_nat_refl. rewrite <- H2 in H3. simpl in H3. inversion H3.
-  apply not_eq_sym in n. apply Nat.eqb_neq in n. rewrite n in H3. 
-  apply IHsto_trace in H3. auto.
-  unfold trace_tid_last in H0. inversion H0.
-  destruct (Nat.eq_dec tid tid0); subst. assert (true = (tid0 =? tid0)).
-  apply beq_nat_refl. rewrite <- H3 in H4. simpl in H4. inversion H4.
-  apply not_eq_sym in n. apply Nat.eqb_neq in n. rewrite n in H4. 
-  apply IHsto_trace in H4. auto.
-  unfold trace_tid_last in H0. inversion H0.
-  destruct (Nat.eq_dec tid tid0); subst. assert (true = (tid0 =? tid0)).
-  apply beq_nat_refl. rewrite <- H2 in H3. simpl in H3. inversion H3.
-  apply not_eq_sym in n. apply Nat.eqb_neq in n. rewrite n in H3. 
-  apply IHsto_trace in H3. auto.  
-  unfold trace_tid_last in H0. inversion H0.
-  destruct (Nat.eq_dec tid tid0); subst. assert (true = (tid0 =? tid0)).
-  apply beq_nat_refl. rewrite <- H2 in H3. simpl in H3. inversion H3.
-  apply not_eq_sym in n. apply Nat.eqb_neq in n. rewrite n in H3. 
-  apply IHsto_trace in H3. auto.  
-  unfold trace_tid_last in H0. inversion H0.
-  destruct (Nat.eq_dec tid tid0); subst. assert (true = (tid0 =? tid0)).
-  apply beq_nat_refl. rewrite <- H3 in H4. simpl in H4. inversion H4.
-  apply not_eq_sym in n. apply Nat.eqb_neq in n. rewrite n in H4. 
-  apply IHsto_trace in H4. auto.
-  unfold trace_tid_last in H0. inversion H0.
-  destruct (Nat.eq_dec tid tid0); subst. assert (true = (tid0 =? tid0)).
-  apply beq_nat_refl. rewrite <- H2 in H3. simpl in H3. inversion H3.
-  apply not_eq_sym in n. apply Nat.eqb_neq in n. rewrite n in H3. 
-  apply IHsto_trace in H3. auto. 
-  unfold trace_tid_last in H0. inversion H0.
-  destruct (Nat.eq_dec tid tid0); subst. assert (true = (tid0 =? tid0)).
-  apply beq_nat_refl. rewrite <- H2 in H3. simpl in H3. inversion H3.
-  apply not_eq_sym in n. apply Nat.eqb_neq in n. rewrite n in H3. 
-  apply IHsto_trace in H3. auto. 
-  unfold trace_tid_last in H0. inversion H0.
-  destruct (Nat.eq_dec tid tid0); subst. assert (true = (tid0 =? tid0)).
-  apply beq_nat_refl. rewrite <- H2 in H3. simpl in H3. inversion H3.
-  apply not_eq_sym in n. apply Nat.eqb_neq in n. rewrite n in H3. 
-  apply IHsto_trace in H3. auto.
-  unfold trace_tid_last in H0. inversion H0.
-  destruct (Nat.eq_dec tid tid0); subst. 
+  1, 3, 4, 6-8, 10: remove_unrelevant_last_txn; rewrite n in H3; apply IHsto_trace in H3; auto.
+  1, 2: remove_unrelevant_last_txn; rewrite n in H4; apply IHsto_trace in H4; auto.
+  remove_unrelevant_last_txn.
   apply in_or_app. right. simpl. auto.
-  apply not_eq_sym in n. apply Nat.eqb_neq in n. rewrite n in H4. 
+  remove_unrelevant_last_txn.
+  rewrite n in H4. 
   apply IHsto_trace in H4. 
   apply in_or_app. left. auto.
-  unfold trace_tid_last in H0. inversion H0.
-  destruct (Nat.eq_dec tid tid0); subst. assert (true = (tid0 =? tid0)).
-  apply beq_nat_refl. rewrite <- H2 in H3. simpl in H3. inversion H3.
-  apply not_eq_sym in n. apply Nat.eqb_neq in n. rewrite n in H3. 
-  apply IHsto_trace in H3. auto.
 Qed.
 
 
