@@ -846,8 +846,6 @@ Proof.
   apply Forall_inv in H7. simpl in H7. auto.
 Qed.
 
-(***************************************************)
-
 Lemma seq_list_last_tid_dummy tid t:
   sto_trace t ->
   In tid (seq_list t) ->
