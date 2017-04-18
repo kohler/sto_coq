@@ -719,18 +719,19 @@ Proof.
   apply in_or_app. right. simpl. auto.
 Qed.
 
-(*
-Lemma trace_last_seqpoint t tid:
-  sto_trace ((tid, commit_txn (trace_commit_complete_last t)) :: t)
-  -> In (tid, seq_point) t.
+(***************************************************)
+Lemma seq_list_no_two_seqpoint t tid:
+  sto_trace ((tid, seq_point) :: t)
+  -> ~ In (tid, seq_point) t.
 Proof.
   intros.
+  intuition.
   inversion H; subst.
-  unfold trace_tid_last in H2.
-  unfold trace_filter_tid in H2. 
-  admit.
+  apply seq_list_seqpoint with (action0 := seq_point) in H.
+  
 Admitted.
-*)
+(***************************************************)
+
 
 Lemma trace_seqlist_seqpoint t tid:
   In (tid, seq_point) t
@@ -774,7 +775,20 @@ Proof.
     [ subst; rewrite <- beq_nat_refl; cbn; discriminate | ].
   all: apply Nat.eqb_neq in n; rewrite n.
   all: try apply IHST in H0; auto.
+  apply in_app_or in H1.
+  destruct H1. apply IHST in H1; auto.
+  simpl in H1. destruct H1. apply Nat.eqb_neq in n. contradiction. inversion H1.
+Qed.
+
+(***************************************************)
+Lemma seq_list_last_tid_start_txn tid t:
+  sto_trace t ->
+  In tid (seq_list t) ->
+  trace_tid_last tid t <> start_txn.
+Proof.
 Admitted.
+(***************************************************)
+
 
 Lemma seq_list_commit tid t:
   sto_trace t -> 
@@ -848,6 +862,7 @@ Proof.
   auto. auto.
 Qed.
 
+(***************************************************)
 Lemma seq_point_before_commit2 t tid action:
   sto_trace ((tid, action) :: t) ->
   In (tid, seq_point) t ->
@@ -856,15 +871,18 @@ Proof.
   intros.
   inversion H; subst.
   apply trace_seqlist_seqpoint in H0.
-  apply (seq_list_last_tid_dummy _ _) in H0; auto.
-  congruence.
+  apply seq_list_last_tid_dummy in H0; auto; congruence.
   repeat destruct or H4.
-  1-3: apply trace_seqlist_seqpoint in H0.
+  apply trace_seqlist_seqpoint in H0.
+  apply seq_list_last_tid_start_txn in H0; auto; congruence.
+  admit. admit. admit. admit. admit. admit. admit. admit.
+  
 (*  1-3: apply (seq_list_commit_rev) in H0; auto.
 
   assert (In tid (seq_list ((tid, start_txn) :: t))). { simpl.  auto. }
   *)
 Admitted.
+(***************************************************)
   
 
 (*
@@ -986,6 +1004,7 @@ Admitted.
 This lemma proves that the seq_point of each transaction in a STO-trace determines its serialized order in the serial trace
 *)
 
+(***************************************************)
 Lemma seq_list_equal trace:
   sto_trace trace -> 
   seq_list (create_serialized_trace trace trace) = seq_list trace.
@@ -1007,6 +1026,7 @@ Proof.
     
     
 Admitted.
+(***************************************************)
 
 (*
 Lemma seq_list_equal_old tid action trace:
@@ -1077,12 +1097,14 @@ Function check_is_serial_trace (tr: trace) : Prop :=
                           else check_is_serial_trace tail (tid :: tidls)
   end.
 
+(***************************************************)
 Lemma check_split tr1 tr2: 
   check_is_serial_trace tr1 [] 
   -> check_is_serial_trace tr2 []
   -> check_is_serial_trace (tr1 ++ tr2) [].
 Proof.
 Admitted.
+(***************************************************)
   
 Definition is_serial_trace tr: Prop :=
   check_is_serial_trace tr [].
@@ -1093,6 +1115,7 @@ Eval compute in is_serial_trace [(3, commit_txn 1); (3, seq_point); (3, validate
 
 Eval compute in is_serial_trace example_txn.
 
+(***************************************************)
 Lemma is_serial trace:
   is_serial_trace (create_serialized_trace trace trace).
 Proof.
@@ -1104,6 +1127,7 @@ Proof.
   unfold check_is_serial_trace.
   simpl.
 Admitted.
+(***************************************************)
 
 
 (*
@@ -1206,6 +1230,8 @@ Should we prove that create_serialized_trace function actually prove the correct
 STO-trace
 **************************************************
 *)
+
+(***************************************************)
 Lemma write_consistency trace:
   sto_trace trace 
   -> sto_trace (create_serialized_trace trace (seq_list trace))
@@ -1225,6 +1251,7 @@ Proof.
   
   rewrite H3.
 Admitted.
+(***************************************************)
 
 (*
 Now we proceed to the read part of the proof.
@@ -1291,12 +1318,15 @@ Eval compute in compare_read_list [(1, [0;0]); (2, [1;1])] [(1, [0]);(2, [1;1])]
 (*
 A STO-trace and its serial trace should have the same reads.
 *)
+
+(***************************************************)
 Lemma read_consistency trace:
   sto_trace trace 
   -> sto_trace (create_serialized_trace trace (seq_list trace))
   -> is_serial_trace (create_serialized_trace trace (seq_list trace))
   -> read_synchronization trace (create_serialized_trace trace (seq_list trace)).
 Admitted.
+(***************************************************)
 
 (*
 Two traces can be considered equivalent in execution if they produce the same reads and writes
