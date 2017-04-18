@@ -244,6 +244,11 @@ Definition action_no_commit e : Prop :=
   | _ => True
   end.
 
+Definition action_no_seq_point e: Prop:=
+    match e with
+  | seq_point => False
+  | _ => True
+  end.
 (*
 Returns true if the transaction tid's trace has no writes
 Returns false otherwise.
@@ -258,6 +263,8 @@ Returns false otherwise.
 Definition trace_no_commits tid t: Prop :=
   Forall action_no_commit (map snd (trace_filter_tid tid t)).
 
+Definition trace_no_seq_points tid t: Prop :=
+  Forall action_no_seq_point (map snd (trace_filter_tid tid t)).
 (*
 Returns all read_item versions in a trace of a particular transaction.
 *)
@@ -407,7 +414,8 @@ Inductive sto_trace : trace -> Prop :=
         /\ trace_no_writes tid t)
       \/ (trace_tid_last tid t = complete_write_item ver
 			  /\ ~ trace_no_writes tid t)
-      -> trace_no_commits tid t
+      (*-> trace_no_commits tid t*)
+      -> trace_no_seq_points tid t
       -> sto_trace t
       -> sto_trace ((tid, seq_point) :: t)
 
@@ -424,6 +432,7 @@ Hint Constructors sto_trace.
     (*our restart is to add back*)
       -> sto_trace ((trace_rollback newtid (trace_commit_last t) (trace_filter_startreadwrite tid t)) ++ t).*)
 
+(*
 Example sto_trace_example_rollback:  
 sto_trace [(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
 
@@ -662,7 +671,7 @@ apply start_txn_step. unfold trace_tid_last. auto.
 apply start_txn_step. unfold trace_tid_last. auto.
 
 apply empty_step.
-
+*)
 Definition example_txn:=
 [(2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (2, read_item 0); (2, start_txn); (1, commit_txn 0); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (1, start_txn)].
 
@@ -675,6 +684,24 @@ Proof.
   intros.
   inversion H; subst; auto.
 Qed.
+(* some error with this lemma
+Lemma sto_trace_app2 tid tid0 action action0 t:
+  tid <> tid0 -> sto_trace ((tid, action) :: (tid0, action0) :: t) -> sto_trace ((tid, action) :: t).
+Proof.
+  intros.
+  inversion H0; subst.
+  apply sto_trace_app in H5. unfold trace_tid_last in H3; simpl in H3.
+  apply not_eq_sym in H. apply Nat.eqb_neq in H; rewrite H in H3.
+  apply start_txn_step with (tid := tid) in H5; [ auto | unfold trace_tid_last; auto ].
+  apply sto_trace_app in H6. unfold trace_tid_last in H4; simpl in H4.
+  apply not_eq_sym in H. apply Nat.eqb_neq in H; rewrite H in H4.
+  unfold check_lock_or_unlock in H5. unfold trace_filter_lock in H5.
+  unfold trace_filter_unlock in H5.
+  apply read_item_step with (tid := tid) (val := val) (oldver := oldver) in H6; [ auto | unfold trace_tid_last; auto | auto].
+Qed.
+*)
+
+
 (*
 Returns the serialized sequence of transactions in the STO trace based on seq_point of each transaction
 The first element (tid) of the sequence is the first transaction that completes in the serial trace
@@ -719,20 +746,6 @@ Proof.
   apply in_or_app. right. simpl. auto.
 Qed.
 
-(***************************************************)
-Lemma seq_list_no_two_seqpoint t tid:
-  sto_trace ((tid, seq_point) :: t)
-  -> ~ In (tid, seq_point) t.
-Proof.
-  intros.
-  intuition.
-  inversion H; subst.
-  apply seq_list_seqpoint with (action0 := seq_point) in H.
-  
-Admitted.
-(***************************************************)
-
-
 Lemma trace_seqlist_seqpoint t tid:
   In (tid, seq_point) t
   -> In tid (seq_list t).
@@ -761,6 +774,79 @@ Proof.
   contradiction. inversion H.
   all: destruct (Nat.eq_dec tid tid0); subst; apply in_cons; auto.
 Qed.
+
+Lemma filter_app (f: nat * action -> bool) l1 l2:
+  filter f (l1 ++ l2) = filter f l1 ++ filter f l2.
+Proof.
+  induction l1.
+  - simpl. auto.
+  - Search (filter).
+    simpl. remember (f a) as X. destruct X. 
+    simpl. rewrite IHl1. auto. auto.
+Qed.
+Lemma trace_filter_tid_app tid tr1 tr2:
+  trace_filter_tid tid (tr1 ++ tr2) =
+  trace_filter_tid tid tr1 ++ trace_filter_tid tid tr2.
+Proof.
+  unfold trace_filter_tid. 
+  apply filter_app.
+Qed.
+Lemma Forall_app (P: action -> Prop) l1 l2:
+    Forall P (l1 ++ l2) <-> Forall P l1 /\ Forall P l2.
+Proof.
+  split.
+  - intros. split;
+    rewrite Forall_forall in *. 
+    intros. Search (In _ ( _ ++ _ )).
+    assert (In x l1 \/ In x l2 -> In x (l1 ++ l2)). apply in_or_app.
+    assert (In x l1 \/ In x l2). left. auto. 
+    apply H1 in H2. auto.
+    intros.
+    assert (In x l1 \/ In x l2 -> In x (l1 ++ l2)). apply in_or_app.
+    assert (In x l1 \/ In x l2). right. auto. 
+    apply H1 in H2. auto.
+  - intros. destruct_pairs.
+    rewrite Forall_forall in *. Search (In _ ( _ ++ _ )).
+    intros.
+    apply in_app_or in H1.
+    (* firstorder. solved here*)
+    destruct H1.
+    apply H in H1. auto. apply H0 in H1. auto.
+Qed.
+
+Lemma seq_list_no_two_seqpoint t tid:
+  sto_trace ((tid, seq_point) :: t)
+  -> ~ In (tid, seq_point) t.
+Proof.
+  intros.
+  assert (sto_trace t). { apply sto_trace_app with (tid0 := tid) (action0 := seq_point). auto. }
+  inversion H.
+  intuition.
+  unfold trace_no_seq_points in H4.
+  apply in_split in H6.
+  destruct H6. destruct H6.
+  rewrite H6 in H4. simpl in H4.
+  rewrite trace_filter_tid_app in H4.
+  simpl in H4.
+  rewrite <-beq_nat_refl in H4. 
+  rewrite map_app in H4.
+  rewrite Forall_app in H4.
+  destruct H4. simpl in H7. 
+  apply Forall_inv in H7. simpl in H7. auto.
+  unfold trace_no_seq_points in H4.
+  apply in_split in H6.
+  destruct H6. destruct H6.
+  rewrite H6 in H4. simpl in H4.
+  rewrite trace_filter_tid_app in H4.
+  simpl in H4.
+  rewrite <-beq_nat_refl in H4. 
+  rewrite map_app in H4.
+  rewrite Forall_app in H4.
+  destruct H4. simpl in H7. 
+  apply Forall_inv in H7. simpl in H7. auto.
+Qed.
+
+(***************************************************)
 
 Lemma seq_list_last_tid_dummy tid t:
   sto_trace t ->
@@ -875,7 +961,7 @@ Proof.
   repeat destruct or H4.
   apply trace_seqlist_seqpoint in H0.
   apply seq_list_last_tid_start_txn in H0; auto; congruence.
-  admit. admit. admit. admit. admit. admit. admit. admit.
+  Focus 9.
   
 (*  1-3: apply (seq_list_commit_rev) in H0; auto.
 
@@ -884,45 +970,6 @@ Proof.
 Admitted.
 (***************************************************)
   
-
-(*
-Lemma seq_list_commit tid action n t:
-  sto_trace ((tid, action) :: t) ->
-  action = commit_txn n -> 
-  In tid (seq_list ((tid, action) :: t)).
-Proof.
-  intros. subst.
-  inversion H; subst.
-  apply trace_last_seqpoint in H. (*haven't proved*)
-  simpl. apply trace_seqlist_seqpoint. auto.
-Qed.
-*)
-
-(*
-This function creates a serialized trace.
-Just like STO-trace, the order is reversed: that is, the first (tid*action) pair in the serial trace
-constructed by this function is the last operation performed in this trace
-*)
-(*
-Function create_serialized_trace (sto_trace: trace) (seqls : list nat): trace:=
-  match seqls with
-  | [] => []
-  | head :: tail 
-    => create_serialized_trace sto_trace tail ++ trace_filter_tid head sto_trace
-  end.
-*)
-Function create_serialized_trace (sto_trace: trace) (sto_trace_copy: trace): trace:=
-  match sto_trace with
-  | [] => []
-  | (tid, seq_point) :: tail
-    => trace_filter_tid tid sto_trace_copy ++ create_serialized_trace tail sto_trace_copy
-  | _ :: tail => create_serialized_trace tail sto_trace_copy
-  end.
-
-Eval compute in create_serialized_trace example_txn example_txn.
-
-Eval compute in create_serialized_trace example_txn2 example_txn2.
-
 Lemma seq_list_action tid action t:
   sto_trace ((tid, action) :: t) -> 
   action = seq_point \/ action = commit_txn (trace_commit_complete_last t)
@@ -967,6 +1014,54 @@ Proof.
   assert (action = seq_point \/ action = commit_txn (trace_commit_complete_last t)). { right. auto. }
   apply H in H3. auto.
 Qed.
+
+(*
+Lemma seq_list_commit tid action n t:
+  sto_trace ((tid, action) :: t) ->
+  action = commit_txn n -> 
+  In tid (seq_list ((tid, action) :: t)).
+Proof.
+  intros. subst.
+  inversion H; subst.
+  apply trace_last_seqpoint in H. (*haven't proved*)
+  simpl. apply trace_seqlist_seqpoint. auto.
+Qed.
+*)
+
+(*
+This function creates a serialized trace.
+Just like STO-trace, the order is reversed: that is, the first (tid*action) pair in the serial trace
+constructed by this function is the last operation performed in this trace
+*)
+(*
+Function create_serialized_trace (sto_trace: trace) (seqls : list nat): trace:=
+  match seqls with
+  | [] => []
+  | head :: tail 
+    => create_serialized_trace sto_trace tail ++ trace_filter_tid head sto_trace
+  end.
+*)
+Function create_serialized_trace (sto_trace: trace) (sto_trace_copy: trace): trace:=
+  match sto_trace with
+  | [] => []
+  | (tid, seq_point) :: tail
+    => trace_filter_tid tid sto_trace_copy ++ create_serialized_trace tail sto_trace_copy
+  | _ :: tail => create_serialized_trace tail sto_trace_copy
+  end.
+
+Eval compute in create_serialized_trace example_txn example_txn.
+
+Eval compute in create_serialized_trace example_txn2 example_txn2.
+
+Lemma is_sto_trace trace:
+  sto_trace trace ->
+  sto_trace (create_serialized_trace trace trace).
+Proof.
+  intros.
+  induction H.
+  - simpl. auto.
+  - simpl.
+
 (*
 
 Lemma serial_action tid action n t:
