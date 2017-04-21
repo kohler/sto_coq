@@ -1323,6 +1323,27 @@ Proof.
   rewrite <- seq_list_split_no_seqpoint. auto. auto. auto. auto. 
 Qed.
 
+Lemma serial_action_add tid t:
+  sto_trace t
+  -> sto_trace (create_serialized_trace t (seq_list t))
+  -> ~ In tid (seq_list t)
+  -> sto_trace (trace_filter_tid tid t ++ create_serialized_trace t (seq_list t)).
+Proof.
+  intros.
+  assert (~ In (tid, seq_point) t).
+  { intuition. apply trace_seqlist_seqpoint in H2. apply H1 in H2. auto. } 
+  assert (~ In (tid, seq_point) (trace_filter_tid tid t)).
+  { unfold trace_filter_tid.
+    intuition.
+    apply filter_In in H3.
+    destruct H3. apply H2 in H3. auto. }
+  induction (trace_filter_tid tid t).
+  simpl. auto.
+  destruct a.
+  simpl in H3. apply not_or_and in H3. destruct H3.
+  apply IHt0 in H4.
+Admitted.
+ 
 Lemma sto_trace_single tid t:
 sto_trace ((tid, seq_point) :: t)
 -> sto_trace (create_serialized_trace t (seq_list t))
@@ -1405,26 +1426,6 @@ Proof.
   admit.
 Admitted.
 
-  
-(*
-Lemma seq_list_equal_old tid action trace:
-  action = seq_point ->
-  seq_list (create_serialized_trace ((tid, action) :: trace) (seq_list ((tid, action) :: trace))) = seq_list trace ++ [tid].
-Proof.
-  intros. subst. simpl.
-Admitted.
-
-(*
-This lemma proves that the sequences of other actions in each transaction in a STO-trace does not
-affect its order in the serial trace
-*)
-Lemma seq_list_equal2 tid action trace:
-  action <> seq_point ->
-  seq_list (create_serialized_trace ((tid, action) :: trace) (seq_list trace)) = seq_list trace.
-Proof.
-Admitted.
-*)
-
 (*
 Check whether an element a is in the list l
 *)
@@ -1493,6 +1494,18 @@ Lemma is_serial trace:
   check_is_serial_trace (create_serialized_trace trace (seq_list trace)).
 Proof.
   intros.
+  induction H.
+  simpl. auto.
+  simpl. apply start_txn_step with (tid0 := tid0) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H1. auto.
+  simpl. apply read_item_step with (tid := tid0) (val:= val) (oldver:= oldver) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H2. auto. auto.
+  simpl. apply write_item_step with (tid := tid0) (oldval:= oldval) (ver:= ver) (val:= val) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H1. auto.
+  simpl. apply try_commit_txn_step with (tid := tid0) (ver:= ver) (val:= val) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H1. auto.
+  simpl. apply lock_write_item_step with (tid := tid0) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H2. auto. auto.
+  simpl. apply validate_read_item_step with (tid := tid0) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H1. auto.
+  simpl. apply abort_txn_step with (tid := tid0) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H1. auto.
+  simpl. apply complete_write_item_step with (tid := tid0) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H1. auto.
+  simpl. rewrite <- beq_nat_refl.
+  
   
 Admitted.
 (***************************************************)
