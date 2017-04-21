@@ -722,7 +722,7 @@ Note that STO-trace is constructed in a reverse order: the first (tid * action) 
 Function seq_list (sto_trace: trace): list nat:=
   match sto_trace with
   | [] => []
-  | (tid, seq_point) :: tail => seq_list tail ++ [tid]
+  | (tid, seq_point) :: tail => tid :: seq_list tail
   | (tid, dummy) :: tail => seq_list tail
   | (tid, start_txn) :: tail => seq_list tail
   | (tid, read_item n) :: tail => seq_list tail
@@ -754,9 +754,6 @@ Lemma seq_list_not_seqpoint2 tid action t:
   -> ~ In tid (seq_list t).
 Proof.
   intros; destruct action; simpl in *; auto.
-  assert (~ In tid (seq_list t ++ [tid]) -> ~ In tid (seq_list t) /\ ~ In tid [tid]).
-  intuition. apply H1 in H0. simpl in H0.
-  destruct H0. auto.
 Qed.
 
 Lemma seq_list_seqpoint tid action t:
@@ -765,7 +762,7 @@ Lemma seq_list_seqpoint tid action t:
   In tid (seq_list ((tid, action) :: t)).
 Proof.
   intros; subst; simpl.
-  apply in_or_app. right. simpl. auto.
+  left. auto.
 Qed.
 
 Lemma trace_seqlist_seqpoint t tid:
@@ -775,8 +772,8 @@ Proof.
   intros.
   functional induction seq_list t.
   inversion H.
-  destruct (Nat.eq_dec tid tid0); subst; apply in_or_app. 
-  right. simpl. auto.
+  destruct (Nat.eq_dec tid tid0); subst; simpl.
+  simpl. left. auto.
   left. apply IHl. apply in_inv in H. destruct H.
   inversion H. apply Nat.eq_sym in H1. contradiction. auto.
   all: destruct (Nat.eq_dec tid tid0); subst; apply IHl; apply in_inv in H; destruct H; try inversion H; auto.
