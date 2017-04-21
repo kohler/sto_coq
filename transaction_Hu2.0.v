@@ -1345,9 +1345,9 @@ Proof.
 Admitted.
  
 Lemma sto_trace_single tid t:
-sto_trace ((tid, seq_point) :: t)
--> sto_trace (create_serialized_trace t (seq_list t))
--> sto_trace ((trace_filter_tid tid ((tid, seq_point) :: t)) ++ (create_serialized_trace t (seq_list t))).
+  sto_trace ((tid, seq_point) :: t)
+  -> sto_trace (create_serialized_trace t (seq_list t))
+  -> sto_trace ((trace_filter_tid tid ((tid, seq_point) :: t)) ++ (create_serialized_trace t (seq_list t))).
 Proof.
   intros; simpl.
   rewrite <- beq_nat_refl.
