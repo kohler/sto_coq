@@ -417,6 +417,8 @@ Inductive sto_trace : trace -> Prop :=
       -> sto_trace ((tid, commit_txn (trace_commit_complete_last t)) :: t).
 Hint Constructors sto_trace.
 
+Hint Constructors sto_trace.
+
 (*we don't need to rollback, once a transaction aborts, it will 'disappear'. A new transaction will do its work.*)
 (*| restart_txn_step: forall t tid newtid,
       trace_tid_last tid t = abort_txn (*we get abort and then restart*)
@@ -1047,6 +1049,23 @@ Definition write_synchronization trace1 trace2: Prop:=
 *)
 Eval compute in write_synchronization example_txn (create_serialized_trace example_txn (seq_list example_txn)).
 
+Lemma serialized_trace_app_no_sp:
+  forall t tid a, sto_trace t -> a <> seq_point -> 
+    create_serialized_trace t (seq_list t) = 
+    create_serialized_trace ((tid, a)::t) (seq_list ((tid, a)::t)).
+Proof.
+  intros.
+  assert (seq_list t = seq_list ((tid0, a) :: t)) by (induction a; simpl; intuition).
+  rewrite <- H1.
+  assert (~ In tid0 (seq_list t)). {
+  inversion H. Focus 2.
+  remember (seq_list t) as splist. clear H1. clear Heqsplist.
+  functional induction (create_serialized_trace ((tid0, a) :: t) splist).
+  -- auto.
+  -- simpl. assert (tid0 =? head = false). admit. 
+     rewrite H1. admit.
+
+
 (*
 A STO-trace and its serial trace should have the same writes.
 **************************************************
@@ -1054,16 +1073,46 @@ Should we prove that create_serialized_trace function actually prove the correct
 STO-trace
 **************************************************
 *)
-Lemma write_consistency trace:
-  sto_trace trace 
-  -> sto_trace (create_serialized_trace trace (seq_list trace))
-  -> is_serial_trace (create_serialized_trace trace (seq_list trace))
-  -> write_synchronization trace (create_serialized_trace trace (seq_list trace)).
+ Lemma write_equivalence trace:
+  sto_trace trace -> 
+  let serialized_trace := create_serialized_trace trace (seq_list trace) in
+  write_synchronization trace serialized_trace.
 
 Proof.
   intros.
   induction H.
-  - unfold write_synchronization; unfold get_write_value_out; simpl; auto.
+  - unfold write_synchronization. unfold get_write_value_out. simpl. auto.
+  - unfold write_synchronization. 
+    unfold write_synchronization in IHsto_trace.
+    assert (get_write_value_out t = get_write_value_out ((tid0, start_txn) :: t)).
+    { unfold get_write_value_out. simpl. clear H. clear serialized_trace.
+      unfold get_write_value_out in IHsto_trace. simpl in IHsto_trace.
+      assert (seq_list (create_serialized_trace t (seq_list t)) = seq_list t). admit.
+      rewrite H in IHsto_trace. clear H. remember (seq_list t) as tids. clear Heqtids.
+      functional induction (get_write_value t tids).
+      -- simpl. auto.
+      -- 
+ simpl. destruct (Nat.eq_dec tid0 head).
+         --- admit. (* This case is not possible. skip for now *)
+         --- apply Nat.eqb_neq in n. rewrite n.
+             assert (get_write_value t tail = get_write_value ((tid0, start_txn) :: t) tail). 
+             { remember ((head, tid_write_value (trace_filter_tid head t))
+                 :: get_write_value t tail) as ls1.
+               remember (get_write_value (create_serialized_trace t (head :: tail))
+                   (head :: tail)) as ls2.
+               functional induction (compare_write_list ls1 ls2).
+                ---- inversion Heqls2.
+                ---- discriminate.
+                ---- discriminate.
+                ---- assert (t1 <> (head, tid_write_value (trace_filter_tid head t))
+         :: get_write_value t tail). admit. admit.
+                ---- auto. intuition. } admit. }
+      rewrite serialized_trace.
+                     
+assert (create_serialized_trace t (head :: tail) == create_serialized_trace t tail).
+ 
+ simpl in *.
+
   - unfold write_synchronization. unfold get_write_value_out.
     assert (seq_list (create_serialized_trace ((tid0, start_txn) :: t) (seq_list ((tid0, start_txn) :: t))) = seq_list t).
     {
@@ -1072,7 +1121,7 @@ Proof.
     }
   
   rewrite H3.
-Admitted.
+Admitted.*)
 
 (*
 Now we proceed to the read part of the proof.
