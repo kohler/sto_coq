@@ -1,4 +1,4 @@
-###Lemmas
+### Lemmas
 - If a trace is a `sto_trace`, removing the last action in the trace (i.e., the first element in the trace) generates a new `sto_trace`.
 ```
 Lemma sto_trace_app tid action t:
