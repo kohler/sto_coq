@@ -91,12 +91,12 @@ Inductive action:=
 |try_commit_txn: action
 |lock_write_item: action
 |validate_read_item: Prop -> action
-|abort_txn: action
+|abort_txn: Prop -> action (*True means abort needs to unlock before abort, False means the transaction about to be aborted does not contain locks*)
 (*|restart_txn: action*)
 |complete_write_item: (*value -> action*)version -> action
 (*|unlock_write_item: version -> action*)
 (*|invalid_write_item: value -> action*)
-|commit_txn: version -> action
+|commit_txn: action
 |seq_point: action.
 (*|obtain_global_tid: action.*)
 (*sp later than last lock, but must before the first commit*)
@@ -111,11 +111,13 @@ Definition trace_filter_tid tid tr : trace :=
 (*
 Returns all commit actions in the trace.
 *)
+(*
 Definition trace_filter_commit tr: trace :=
     filter (fun pr => match snd pr with
-                      | commit_txn _ => true
+                      | commit_txn => true
                       | _ => false
                       end) tr.
+*)
 (*
 Returns all write actions in the trace.
 *)
@@ -135,11 +137,10 @@ Definition trace_filter_read tr: trace :=
                       end) tr.
 
 (*
-Returns all commit & complete_write actions in the trace for updating commit version
+Returns all complete_write actions in the trace for updating version number of reads
 *)
-Definition trace_filter_commit_complete tr: trace :=
+Definition trace_filter_complete tr: trace :=
     filter (fun pr => match snd pr with
-                      | commit_txn _ => true
                       | complete_write_item _ => true
                       | _ => false
                       end) tr.
@@ -155,15 +156,20 @@ Definition trace_tid_last tid t: action :=
 Returns the version number of the last commit
 If there is no commit in the trace, returns 0.
 *)
+(*
 Definition trace_commit_last t: version :=
   match hd dummy (map snd (trace_filter_commit t)) with
 	| commit_txn n => n
 	| _ => 0
   end.
-
+*)
 (*
 Returns the value of the last write
 If there is no write in the trace, returns 0.
+*)
+(*
+PROBLEMATIC: last write cannot be 0 in this case.
+SUGGESTION: Use "option"
 *)
 Definition trace_write_last t: value :=
   match hd dummy (map snd (trace_filter_write t)) with
@@ -175,9 +181,17 @@ Definition trace_write_last t: value :=
 Returns the version number of the last commit/complete_write
 If there is no commit in the trace, returns 0.
 *)
+(*
 Definition trace_commit_complete_last t: version :=
   match hd dummy (map snd (trace_filter_commit_complete t)) with
 	| commit_txn n => n
+  | complete_write_item n => n
+	| _ => 0
+  end.
+*)
+
+Definition trace_complete_last t: version :=
+  match hd dummy (map snd (trace_filter_complete t)) with
   | complete_write_item n => n
 	| _ => 0
   end.
@@ -197,8 +211,8 @@ If a transaction contains either of the actions, the transaction has unlock
 *)
 Definition trace_filter_unlock tr: trace :=
     filter (fun pr => match snd pr with
-                      | commit_txn _ => true
-                      | abort_txn => true
+                      | complete_write_item _ => true
+                      | abort_txn True => true
                       | _ => false
                       end) tr.
 
@@ -215,6 +229,10 @@ Function length (tr: trace) : nat :=
 Returns True if there exists no lock_write_item
 Returns False if there exists locks
 *)
+(*
+WRONG
+*)
+(*
 Definition check_lock_or_unlock tr: Prop :=
   match 
     length (trace_filter_lock tr) <=? length (trace_filter_unlock tr)  
@@ -222,7 +240,15 @@ Definition check_lock_or_unlock tr: Prop :=
 	| true => True
 	| false => False
   end.
+*)
 
+Definition check_lock_or_unlock tr: Prop :=
+  match 
+    length (trace_filter_lock tr) <=? length (trace_filter_unlock tr)  
+  with 
+	| true => True
+	| false => False
+  end.
 
 (*
 Returns true if an action is not a write action
@@ -234,13 +260,19 @@ Definition action_no_write e : Prop :=
   | _ => True
   end.
 
+Definition action_no_read e : Prop :=
+  match e with
+  | read_item _ => False
+  | _ => True
+  end.
+
 (*
 Returns true if an action is not a commit_txn action
 Returns false if an action is a commit_txn action.
 *)
 Definition action_no_commit e : Prop :=
   match e with
-  | commit_txn _ => False
+  | commit_txn => False
   | _ => True
   end.
 
@@ -249,12 +281,22 @@ Definition action_no_seq_point e: Prop:=
   | seq_point => False
   | _ => True
   end.
+
+Definition action_is_lock e: Prop:=
+    match e with
+  | lock_write_item => True
+  | _ => False
+  end.
 (*
 Returns true if the transaction tid's trace has no writes
 Returns false otherwise.
 *)
 Definition trace_no_writes tid t: Prop :=
   Forall action_no_write (map snd (trace_filter_tid tid t)).
+
+Definition trace_no_reads tid t: Prop :=
+  Forall action_no_read (map snd (trace_filter_tid tid t)).
+
 
 (*
 Returns true if the transaction tid's trace has no commits
@@ -265,6 +307,10 @@ Definition trace_no_commits tid t: Prop :=
 
 Definition trace_no_seq_points tid t: Prop :=
   Forall action_no_seq_point (map snd (trace_filter_tid tid t)).
+
+Definition trace_has_locks tid t: Prop :=
+  Forall action_is_lock (map snd (trace_filter_tid tid t)).
+
 (*
 Returns all read_item versions in a trace of a particular transaction.
 *)
@@ -295,6 +341,7 @@ Function check_version (vs : list version) (v : version) : Prop :=
 (*
 Returns all start/read/write actions in the trace.
 *)
+(*
 Definition trace_filter_startreadwrite tid tr: trace :=
     filter (fun pr => (fst pr =? tid) &&
                       (match snd pr with
@@ -303,7 +350,7 @@ Definition trace_filter_startreadwrite tid tr: trace :=
                       | start_txn => true
                       | _ => false
                       end)) tr.
-
+*)
 (*
 Returns all newtid with start/read/write actions in the trace.
 *)
@@ -339,7 +386,7 @@ Inductive sto_trace : trace -> Prop :=
     (*check locked or not*)
     -> check_lock_or_unlock t
     -> sto_trace t
-    -> sto_trace ((tid, read_item (trace_commit_last t)) :: t)
+    -> sto_trace ((tid, read_item (trace_complete_last t)) :: t)
 
 | write_item_step: forall t tid oldval val ver, 
     trace_tid_last tid t = start_txn 
@@ -355,17 +402,18 @@ Inductive sto_trace : trace -> Prop :=
 			-> sto_trace ((tid, try_commit_txn)::t)
 
 | lock_write_item_step: forall t tid,
-			trace_tid_last tid t = try_commit_txn
-			/\ ~ trace_no_writes tid t
+      ~ trace_no_writes tid t
       -> check_lock_or_unlock t
+			-> trace_tid_last tid t = try_commit_txn
 			-> sto_trace t
 			-> sto_trace ((tid, lock_write_item) :: t)
 
 | validate_read_item_step: forall t tid,
-			(trace_tid_last tid t = try_commit_txn /\ trace_no_writes tid t ) (*read only*)
-			\/ trace_tid_last tid t = lock_write_item (*lock write*)
+      ~ trace_no_reads tid t
+			-> (trace_tid_last tid t = try_commit_txn /\ trace_no_writes tid t ) (*read only*)
+			\/ trace_tid_last tid t = lock_write_item (*/\ ~ trace_no_writes tid t*)(*lock write*)
 			-> sto_trace t
-			-> sto_trace ((tid, validate_read_item (check_version (read_versions_tid tid t)  (trace_commit_last t) ))::t)
+			-> sto_trace ((tid, validate_read_item (check_version (read_versions_tid tid t)  (trace_complete_last t) ))::t)
 
 (****************************************)
 (*| abort_readonly_txn_step: forall t tid,
@@ -381,17 +429,41 @@ Inductive sto_trace : trace -> Prop :=
       -> sto_trace ([(tid, abort_txn); (tid, unlock_write_item (trace_commit_last t))] ++ t)*)
 (****************************************)
 
+(*
+<<<<<<<<<<<<<<<<<<<>>>>>>>>>>>>>>>>>>>
+The other abort condition is not included here
+If when trying to lock memory location to write (in lock_write_item_step), there already exists a lock on that location,
+then the transaction should be aborted: lock_write_item -> abort
+The other similar situation that is not encoded is: read_item -> abort
+
+THIS MODEL IS NOT COMPLETE
+
+*)
 | abort_txn_step: forall t tid,
       trace_tid_last tid t = validate_read_item False 
       -> sto_trace t
-      -> sto_trace ((tid, abort_txn) :: t) (*abort will contain unlock....*)
-      
+      -> sto_trace ((tid, abort_txn (trace_has_locks tid t)) :: t) (*abort will contain unlock....*)
+
+(*sequential point*)
+| seq_point_step: forall t tid,
+      (trace_tid_last tid t = validate_read_item True (*/\ ~ trace_no_reads tid t*))
+      \/ (trace_tid_last tid t = lock_write_item /\ trace_no_reads tid t)
+      (*-> trace_no_commits tid t*)
+      -> trace_no_seq_points tid t
+      -> sto_trace t
+      -> sto_trace ((tid, seq_point) :: t)
+(*
 | complete_write_item_step: forall t tid,
 			trace_tid_last tid t = validate_read_item True (*valid read*)
       /\ ~ trace_no_writes tid t
       -> sto_trace t
       -> sto_trace ((tid, complete_write_item (S (trace_commit_last t))) :: t)
-
+*)
+| complete_write_item_step: forall t tid,
+      ~ trace_no_writes tid t
+      -> trace_tid_last tid t = seq_point
+      -> sto_trace t
+      -> sto_trace ((tid, complete_write_item (S (trace_complete_last t))) :: t)
 (*| unlock_write_item_step: forall t tid ver,
       trace_tid_last tid t = complete_write_item ver
 			/\ ~ trace_no_writes tid t (*locked*)
@@ -409,276 +481,19 @@ Inductive sto_trace : trace -> Prop :=
       -> sto_trace t
       -> sto_trace ((tid, commit_txn ver) :: t).*)
 (****************************************)
-
-(*sequential point*)
-| seq_point_step: forall t tid ver,
-      (trace_tid_last tid t = validate_read_item True
-        /\ trace_no_writes tid t)
-      \/ (trace_tid_last tid t = complete_write_item ver
-			  /\ ~ trace_no_writes tid t)
-      (*-> trace_no_commits tid t*)
-      -> trace_no_seq_points tid t
+| commit_txn_step: forall t tid ver,
+      (trace_tid_last tid t = seq_point /\ trace_no_writes tid t)
+      \/ (trace_tid_last tid t = complete_write_item ver)
       -> sto_trace t
-      -> sto_trace ((tid, seq_point) :: t)
+      -> sto_trace ((tid, commit_txn) :: t).
 
-| commit_txn_step: forall t tid,
-      trace_tid_last tid t = seq_point
-      -> sto_trace t
-      -> sto_trace ((tid, commit_txn (trace_commit_complete_last t)) :: t).
 Hint Constructors sto_trace.
 
-(*we don't need to rollback, once a transaction aborts, it will 'disappear'. A new transaction will do its work.*)
-(*| restart_txn_step: forall t tid newtid,
-      trace_tid_last tid t = abort_txn (*we get abort and then restart*)
-      -> sto_trace t
-    (*our restart is to add back*)
-      -> sto_trace ((trace_rollback newtid (trace_commit_last t) (trace_filter_startreadwrite tid t)) ++ t).*)
-
-(*
-Example sto_trace_example_rollback:  
-sto_trace [(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
-
-assert (trace_commit_complete_last [(3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)] = 1).
-{ unfold trace_commit_complete_last. simpl. auto. }
-rewrite <- H. 
-apply commit_txn_step; rewrite H. 
-unfold trace_tid_last. simpl. auto.
-clear H.
-
-apply seq_point_step with (ver := 1).
-unfold trace_tid_last. simpl. left. split. auto.
-unfold trace_no_writes. simpl.
-repeat apply Forall_cons; simpl; auto.
-unfold trace_no_commits. simpl.
-repeat apply Forall_cons; simpl; auto.
-
-assert ((check_version (read_versions_tid 3 ([(3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) (trace_commit_last ([(3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) = True)).
-  {unfold check_version. simpl. auto. } 
-  rewrite <- H.
-
-apply validate_read_item_step.
-unfold trace_tid_last. simpl. left. split. auto.
-unfold trace_no_writes.
-repeat apply Forall_cons; simpl; auto. rewrite H.
-clear H.
-
-apply try_commit_txn_step with (ver:= 1) (val:= 0).
-unfold trace_tid_last. simpl. left. auto.
-
-(*assert (trace_rollback 3 (trace_commit_last [(1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, unlock_write_item 1); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)]) (trace_filter_startreadwrite 1 [(1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, unlock_write_item 1); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)]) = [(3, read_item 1); (3, start_txn)]).
-unfold trace_rollback. simpl.
-unfold trace_commit_last. simpl. auto.
-
-assert ([(3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, unlock_write_item 1); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)] = [(3, read_item 1); (3, start_txn)] ++ [(1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, unlock_write_item 1); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)]). auto.
-rewrite H0. rewrite <- H.
-apply restart_txn_step. unfold trace_tid_last. simpl. auto. clear H H0.
-*)
-
-assert (trace_commit_last [(3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)] = 1).
-{unfold trace_commit_last; simpl. auto. }
-rewrite <- H.
-apply read_item_step with (val:=0) (oldver:=0); rewrite H.
-unfold trace_tid_last. simpl. left. auto.
-unfold check_lock_or_unlock. simpl. auto. clear H.
- 
-apply start_txn_step. 
-unfold trace_tid_last. simpl. auto.
-
-apply abort_txn_step.
-unfold trace_tid_last. simpl. auto.
-
-assert ((check_version (read_versions_tid 1 ([(1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) (trace_commit_last ([(1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) = False)).
-unfold check_version. simpl. auto.
-rewrite <- H. 
-apply validate_read_item_step. 
-unfold trace_tid_last. simpl. left. split. auto.
-unfold trace_no_writes. simpl.
-repeat apply Forall_cons; simpl; auto.
-clear H.
-
-apply try_commit_txn_step with (ver:= 0) (val:= 4).
-unfold trace_tid_last. simpl. auto.
-
-
-assert (trace_commit_complete_last [ (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)] = 1).
-{ unfold trace_commit_complete_last. simpl. auto. }
-rewrite <- H.
-apply commit_txn_step; rewrite H.
-unfold trace_tid_last. simpl. auto.
-
-apply seq_point_step with (ver:=1). right.
-unfold trace_tid_last. simpl. split. auto.
-unfold trace_no_writes. simpl.
-intuition. 
-inversion H0. inversion H4. inversion H8. inversion H12. inversion H16.
-simpl in H19. auto. 
-unfold trace_no_commits. simpl.
-repeat apply Forall_cons; simpl; auto.
-(*
-apply unlock_write_item_step.
-unfold trace_tid_last. simpl. split. auto.
-unfold trace_no_writes. simpl.
-intuition. 
-inversion H. inversion H3. inversion H7. inversion H11. inversion H15.
-simpl in *. auto.
-*)
-clear H.
-assert (trace_commit_last ([(2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)]) = 0).
-{ unfold trace_commit_last. simpl. auto. }
-assert (1 = S (trace_commit_last [(2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])).
-{ rewrite H. auto. }
-rewrite H0.
-
-apply complete_write_item_step; rewrite <-H0.
-unfold trace_tid_last. simpl. split. auto.
-unfold trace_no_writes. simpl.
-intuition.
-inversion H1. inversion H5. inversion H9. inversion H13.
-simpl in *. auto.
-clear H H0.
-assert ((check_version (read_versions_tid 2 ([(2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) (trace_commit_last ([(2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) = True)).
-  {unfold check_version. simpl. auto. }
-  rewrite <- H.
-
-apply validate_read_item_step. 
-unfold trace_tid_last. simpl. right. auto. clear H.
-
-apply lock_write_item_step. split.
-unfold trace_tid_last. simpl. auto.
-unfold trace_no_writes. simpl.
-intuition.
-inversion H. inversion H3. simpl in *. auto.
-unfold check_lock_or_unlock. simpl. auto.
-
-apply try_commit_txn_step with (ver := 0) (val:= 4).
-unfold trace_tid_last. simpl. auto.
-
-apply write_item_step with (ver:=0) (oldval:=0).
-unfold trace_tid_last. simpl. right. left. auto.
-
-assert (trace_commit_last [(2, read_item 0); (2, start_txn); (1, start_txn)] = 0).
-{unfold trace_commit_last; simpl. auto. }
-rewrite <- H.
-apply read_item_step with (val:=0) (oldver:=0); rewrite H. clear H.
-unfold trace_tid_last. simpl. left. auto.
-unfold check_lock_or_unlock. simpl. auto.
-
-assert (trace_commit_last [(2, start_txn); (1, start_txn)] = 0).
-{unfold trace_commit_last; simpl. auto. }
-rewrite <- H0.
-apply read_item_step with (val:=0) (oldver:=0); rewrite H0. clear H H0.
-unfold trace_tid_last. simpl. left. auto.
-unfold check_lock_or_unlock. simpl. auto.
-
-apply start_txn_step. unfold trace_tid_last. auto.
-apply start_txn_step. unfold trace_tid_last. auto.
-
-apply empty_step.
-
-Example sto_trace_example_commit:  
-sto_trace [(2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
-
-assert (trace_commit_complete_last [(2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)] = 1).
-{ unfold trace_commit_complete_last. simpl. auto. }
-rewrite <- H. 
-apply commit_txn_step.
-unfold trace_tid_last; rewrite H. simpl. auto. rewrite H. clear H.
-
-apply seq_point_step with (ver:= 1). 
-unfold trace_tid_last. simpl. right. split. auto.
-unfold trace_no_writes. simpl.
-intuition. 
-inversion H. inversion H3. inversion H7. inversion H11. inversion H15.
-simpl in H18. auto.
-unfold trace_no_commits. simpl.
-repeat apply Forall_cons; simpl; auto.
-
-assert (trace_commit_last ([(2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, seq_point);  (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)]) = 0).
-{ unfold trace_commit_last. simpl. auto. }
-assert (1 = S (trace_commit_last [(2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, seq_point);  (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0);(2, read_item 0); (2, start_txn); (1, start_txn)])).
-{ rewrite H. auto. }
-rewrite H0.
-
-apply complete_write_item_step; rewrite <-H0.
-unfold trace_tid_last. simpl. split. auto.
-unfold trace_no_writes. simpl.
-intuition.
-inversion H1. inversion H5. inversion H9. inversion H13.
-simpl in *. auto.
-clear H H0.
-assert ((check_version (read_versions_tid 2 ([(2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) (trace_commit_last ([(2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, commit_txn 0); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) = True)).
-  {unfold check_version. simpl. auto. }
-  rewrite <- H.
-
-apply validate_read_item_step; rewrite H. 
-unfold trace_tid_last. simpl. right. auto. clear H.
-
-apply lock_write_item_step. split.
-unfold trace_tid_last. simpl. auto.
-unfold trace_no_writes. simpl.
-intuition.
-inversion H. inversion H3. simpl in *. auto.
-unfold check_lock_or_unlock. simpl. auto.
-
-apply try_commit_txn_step with (ver := 0) (val:= 4).
-unfold trace_tid_last. simpl. auto.
-
-apply write_item_step with (ver:=0) (oldval:=0).
-unfold trace_tid_last. simpl. right. left. auto.
-
-assert (trace_commit_complete_last [ (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)] = 0).
-{ unfold trace_commit_complete_last. simpl. auto. }
-rewrite <- H. 
-apply commit_txn_step; rewrite H.
-unfold trace_tid_last. simpl. auto.
-
-apply seq_point_step with (ver:= 0).
-unfold trace_tid_last. simpl. left. split. auto.
-clear H.
-unfold trace_no_writes. simpl.
-repeat apply Forall_cons; simpl; auto. clear H.
-unfold trace_no_commits. simpl.
-repeat apply Forall_cons; simpl; auto. clear H.
-
-assert ((check_version (read_versions_tid 1 ([(1, try_commit_txn); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) (trace_commit_last ([(1, try_commit_txn); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)])) = True)).
-  {unfold check_version. simpl. auto. } 
-  rewrite <- H.
-
-apply validate_read_item_step.
-unfold trace_tid_last. simpl. left. split. auto.
-unfold trace_no_writes.
-repeat apply Forall_cons; simpl; auto.
-clear H.
-
-apply try_commit_txn_step with (ver:= 0) (val:= 0).
-unfold trace_tid_last. simpl. left. auto.
-
-assert (trace_commit_last [(2, read_item 0); (2, start_txn); (1, start_txn)] = 0).
-{unfold trace_commit_last; simpl. auto. }
-rewrite <- H.
-
-apply read_item_step with (val:=0) (oldver:=0); rewrite H. clear H.
-unfold trace_tid_last. simpl. left. auto.
-unfold check_lock_or_unlock. simpl. auto.
-
-assert (trace_commit_last [(2, start_txn); (1, start_txn)] = 0).
-{unfold trace_commit_last; simpl. auto. }
-rewrite <- H0.
-
-apply read_item_step with (val:=0) (oldver:=0); rewrite H0. clear H H0.
-unfold trace_tid_last. simpl. left. auto.
-unfold check_lock_or_unlock. simpl. auto.
-
-apply start_txn_step. unfold trace_tid_last. auto.
-apply start_txn_step. unfold trace_tid_last. auto.
-
-apply empty_step.
-*)
 Definition example_txn:=
-[(2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (2, read_item 0); (2, start_txn); (1, commit_txn 0); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (1, start_txn)].
+[(2, commit_txn); (2, complete_write_item 1); (2, seq_point); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (2, read_item 0); (2, start_txn); (1, commit_txn); (1, seq_point); (1, validate_read_item True); (1, try_commit_txn); (1, read_item 0); (1, start_txn)].
 
 Definition example_txn2:=
-[(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
+[(3, commit_txn); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn False); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn); (2, complete_write_item 1); (2, seq_point); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
 
 Lemma sto_trace_app tid action t:
   sto_trace ((tid, action) :: t) -> sto_trace t.
@@ -730,9 +545,9 @@ Function seq_list (sto_trace: trace): list nat:=
   | (tid, try_commit_txn) :: tail => seq_list tail
   | (tid, lock_write_item) :: tail => seq_list tail
   | (tid, validate_read_item b) :: tail => seq_list tail
-  | (tid, abort_txn) :: tail => seq_list tail
+  | (tid, abort_txn _) :: tail => seq_list tail
   | (tid, complete_write_item n) :: tail => seq_list tail
-  | (tid, commit_txn n) :: tail => seq_list tail
+  | (tid, commit_txn) :: tail => seq_list tail
   end.
 
 Eval compute in seq_list example_txn.
@@ -840,15 +655,15 @@ Proof.
   intuition.
   unfold trace_no_seq_points in H4.
   apply in_split in H6.
-  destruct H6. destruct H6.
-  rewrite H6 in H4. simpl in H4.
+  destruct H6. destruct H3.
+  rewrite H3 in H4. simpl in H4.
   rewrite trace_filter_tid_app in H4.
   simpl in H4.
   rewrite <-beq_nat_refl in H4. 
   rewrite map_app in H4.
   rewrite Forall_app in H4.
-  destruct H4. simpl in H7. 
-  apply Forall_inv in H7. simpl in H7. auto.
+  destruct H4. simpl in H6. 
+  apply Forall_inv in H6. simpl in H6. auto.
   unfold trace_no_seq_points in H4.
   apply in_split in H6.
   destruct H6. destruct H6.
@@ -880,9 +695,10 @@ Proof.
   simpl in H1. apply Forall_inv in H1. simpl in H1. auto.
 Qed.
 
+(*
 Lemma seq_point_after t1 t2 tid action:
   sto_trace ((tid, action) :: t1 ++ (tid, seq_point) :: t2)
-  -> action = commit_txn (trace_commit_complete_last (t1 ++ (tid, seq_point) :: t2)).
+  -> action = commit_txn (trace_complete_last (t1 ++ (tid, seq_point) :: t2)).
 Proof.
   intros.
   induction t1.
@@ -901,6 +717,7 @@ Proof.
   destruct a. 
   admit.
 Admitted.
+*)
 
 (* useless lemma
 Lemma seq_list_last_tid_dummy tid t:
@@ -992,8 +809,9 @@ Lemma seq_list_commit tid t:
 Proof.
   intros.
   induction H; simpl; try discriminate.
-  1, 3, 4, 6-8, 10: remove_unrelevant_last_txn; rewrite n in H3; apply IHsto_trace in H3; auto.
-  1, 2: remove_unrelevant_last_txn; rewrite n in H4; apply IHsto_trace in H4; auto.
+  1, 3-4, 7, 10 : remove_unrelevant_last_txn; rewrite n in H3; apply IHsto_trace in H3; auto.
+  1, 3, 5: remove_unrelevant_last_txn; rewrite n in H4; apply IHsto_trace in H4; auto.
+  1: remove_unrelevant_last_txn; rewrite n in H5; apply IHsto_trace in H5; auto.
   remove_unrelevant_last_txn.
   left. auto.
   rewrite n in H4. 
@@ -1002,8 +820,8 @@ Proof.
 Qed.
 
 
-Lemma seq_point_before_commit (t:trace) (tid: tid) n:
-  sto_trace ((tid, commit_txn n) :: t) ->
+Lemma seq_point_before_commit (t:trace) (tid: tid):
+  sto_trace ((tid, commit_txn) :: t) ->
   In (tid, seq_point) t.
 Proof.
   intros.
