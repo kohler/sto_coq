@@ -677,6 +677,14 @@ Proof.
   apply Forall_inv in H7. simpl in H7. auto.
 Qed.
 
+Ltac myauto :=
+  repeat match goal with
+  | |- context[_] =>
+      auto 100; intuition; cbn in *; simpl in *; auto 100
+  | |- context[_] =>
+      try contradiction; try discriminate
+end.
+
 Lemma seq_list_no_two_seqpoint2 t1 t2 tid:
   sto_trace (t1 ++ (tid, seq_point) :: t2)
   -> ~ In (tid, seq_point) t1.
@@ -696,25 +704,28 @@ Proof.
 Qed.
 
 
+
 Lemma seq_point_after t1 t2 tid action:
   sto_trace ((tid, action) :: t1 ++ (tid, seq_point) :: t2)
-  -> action = commit_txn (trace_complete_last (t1 ++ (tid, seq_point) :: t2)).
+  -> action = commit_txn \/ action = complete_write_item (S (trace_complete_last (t1 ++ (tid, seq_point) :: t2))).
 Proof.
   intros.
   induction t1.
   simpl in H.
-  inversion H; subst.
-  simpl in H2. rewrite <- beq_nat_refl in H2. inversion H2.
-  unfold trace_tid_last in H3. simpl in H3. rewrite <- beq_nat_refl in H3. repeat destruct or H3; inversion H3.
-  unfold trace_tid_last in H2. simpl in H2. rewrite <- beq_nat_refl in H2. repeat destruct or H2; inversion H2.
-  unfold trace_tid_last in H2. simpl in H2. rewrite <- beq_nat_refl in H2. repeat destruct or H2; inversion H2.
-  unfold trace_tid_last in H3. simpl in H3. rewrite <- beq_nat_refl in H3. destruct H3. simpl in H0. inversion H0.
-  unfold trace_tid_last in H2. simpl in H2. rewrite <- beq_nat_refl in H2. destruct H2. destruct H0. simpl in H0. inversion H0. simpl in H0. inversion H0.
-  unfold trace_tid_last in H2. simpl in H2. rewrite <- beq_nat_refl in H2. inversion H2.
-  unfold trace_tid_last in H2. simpl in H2. rewrite <- beq_nat_refl in H2. destruct H2. inversion H0.
-  unfold trace_tid_last in H3. simpl in H3. rewrite <- beq_nat_refl in H3. repeat destruct or H3. destruct H3. inversion H0. destruct H3. inversion H0.
-  auto.
-  destruct a. 
+  - inversion H; subst.
+    -- simpl in H2. rewrite <- beq_nat_refl in H2. inversion H2.
+    -- unfold trace_tid_last in H3. simpl in H3. rewrite <- beq_nat_refl in H3. repeat destruct or H3; inversion H3.
+    -- unfold trace_tid_last in H2. simpl in H2. rewrite <- beq_nat_refl in H2. repeat destruct or H2; inversion H2.
+    -- unfold trace_tid_last in H2. simpl in H2. rewrite <- beq_nat_refl in H2. repeat destruct or H2; inversion H2.
+    -- unfold trace_tid_last in H5. simpl in H5. rewrite <- beq_nat_refl in H5. inversion H5.
+    -- unfold trace_tid_last in H4. simpl in H4. rewrite <- beq_nat_refl in H4. destruct H4. destruct H0. simpl in H0. inversion H0. simpl in H0. inversion H0.
+    -- unfold trace_tid_last in H2. simpl in H2. rewrite <- beq_nat_refl in H2. inversion H2.
+    -- unfold trace_tid_last in H3. simpl in H3. rewrite <- beq_nat_refl in H3. destruct H3. inversion H0. inversion H0. inversion H1.
+    -- unfold trace_tid_last in H4. simpl in H4. rewrite <- beq_nat_refl in H4. simpl in *. right. auto.
+    -- auto.
+  - destruct a. destruct a.
+    -- destruct (Nat.eq_dec tid t); subst; apply sto_trace_app in H; inversion H.
+    -- destruct (Nat.eq_dec tid t); subst.
   admit.
 Admitted.
 
@@ -819,9 +830,14 @@ Proof.
   right. auto.
 Qed.
 
-Lemma seq_list_complete tid t v:
+Lemma same_version v1 v2:
+  complete_write_item v1 = complete_write_item v2
+  -> v1 = v2.
+Admitted.
+
+Lemma seq_list_complete tid t:
   sto_trace t -> 
-  trace_tid_last tid t = complete_write_item v
+  trace_tid_last tid t = complete_write_item (S (trace_complete_last t))
   -> In tid (seq_list t).
 Proof.
   intros.
@@ -830,10 +846,17 @@ Proof.
   1, 3, 4: remove_unrelevant_last_txn; rewrite n in H4; apply IHsto_trace in H4; auto.
   1: remove_unrelevant_last_txn; rewrite n in H5; apply IHsto_trace in H5; auto.
   remove_unrelevant_last_txn.
+  simpl in *. rewrite <- beq_nat_refl in H0; simpl in *.
+  assert (trace_complete_last t <>
+     trace_complete_last
+       ((tid0, complete_write_item (S (trace_complete_last t))) :: t)).
   admit.
-  rewrite n in H4. 
-  apply IHsto_trace in H4. auto.
+  rewrite H5 in H3. myauto. Search (S _ = S _). apply eq_S in H5. apply H3 in H5. inversion H5.
+  rewrite n in H4.
+  myauto.
 Admitted.
+
+
 
 Lemma seq_point_before_commit (t:trace) (tid: tid):
   sto_trace ((tid, commit_txn) :: t) ->
@@ -873,14 +896,14 @@ Lemma seq_point_one_commit t:
   -> exists n, action = commit_txn n /\ *)
 Lemma seq_list_action tid action t:
   sto_trace ((tid, action) :: t) -> 
-  action = seq_point \/ action = commit_txn
+  action = seq_point \/ action = commit_txn \/ action = complete_write_item (S (trace_complete_last t))
   <-> In tid (seq_list ((tid, action) :: t)).
 Proof.
   split.
   intros. destruct H0.
   apply seq_list_seqpoint; auto.
   subst. inversion H; subst.
-  simpl. apply seq_list_commit; auto.
+  simpl. apply seq_list_complete; auto.
   
   intros.
   apply trace_seqlist_seqpoint_rev in H0.
@@ -1545,8 +1568,6 @@ A STO-trace and its serial trace should have the same reads.
 (***************************************************)
 Lemma read_consistency trace:
   sto_trace trace 
-  -> sto_trace (create_serialized_trace trace (seq_list trace))
-  -> is_serial_trace (create_serialized_trace trace (seq_list trace))
   -> read_synchronization trace (create_serialized_trace trace (seq_list trace)).
 Admitted.
 (***************************************************)
