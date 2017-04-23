@@ -19,70 +19,7 @@ Definition variable := nat.
 Definition store := NatMap.t value.
 Definition heap :=  address -> option (value * lock * version).
 Definition tid := nat.
-(*
-Inductive log : Type :=
-|Read : address -> version -> log -> log
-|Write : address -> value -> log -> log
-|NilLog : log.
 
-Function log_read_only (l:log) : Prop :=
-  match l with
-   | NilLog => True
-   | Read _ _ s => log_read_only s
-   | Write _ _ _ => False
-  end.
-
-Inductive operation :=
-|  read: address -> variable -> operation
-|  write: address -> value -> operation.
-
-Definition transaction := list operation.
-
-Inductive trans_state : Type :=
-| TS: forall (s: store) (h: heap) (l: log), trans_state.
-
-Inductive trans_step1 : relation trans_state :=
-| TS_read: forall s h addr l var val lck ver,
-	h addr = Some (val, lck, ver) ->
-	lck = false -> 
-	trans_step1 (TS s h l) (TS (NatMap.add var val s) h (Read addr ver l))
-|TS_write: forall s h addr l val,
-	trans_step1 (TS s h l) (TS s h (Write addr val l)).
-*)
-(*
-1. What operations do we need to support? For example, non-transactional operations, write from a read, etc
-2. What is the difference between the inductive style that we are using and the functional style?
-   We followed your style in osview.
-3. What is the next step?
-4. How to model concurrency?
-
-forall traces t, if t is sto_trace, then there exists a reorder trace t' where t' reorders t and t' is a sto-trace
-and t' is a serial trace
-
-Let's say each trace is each element belongs to a transaction
-serial means all operations on a transaction grouped
-
-Action:=
-|start_txn: tid -> action
-|read_item: tid -> addr -> action
-|write_item: tid -> addr -> value -> action
-|try_commit_txn: tid -> action
-|lock_write_item: tid -> addr -> action
-|validate_read_item: tid -> addr -> version -> action
-|abort_txn: tid -> action
-|complete_write_item: tid -> addr -> value -> action
-|invalid_write_item: tid -> addr -> value -> action
-|commit_txn: tid -> action
-|obtain_global_tid (must call after all write items are locked)
-
-global_tid order produces the same result, same memory and every read returns the same value
-
-sto_trace may should be inductive type
-should probably have a reorder operation
-How do you define reorder? How do you define serial?
-Do you want to use os_step trick of collecting explicit history?
-** Reordering definition is important **
-*)
 Inductive action:=
 |dummy: action
 |start_txn: action
@@ -856,7 +793,231 @@ Proof.
   myauto.
 Admitted.
 
+Function create_serialized_trace (sto_trace: trace) (seqls : list nat): trace:=
+  match seqls with
+  | [] => []
+  | head :: tail 
+    => trace_filter_tid head sto_trace ++ create_serialized_trace sto_trace tail
+  end.
 
+(*
+Check whether an element a is in the list l
+*)
+Fixpoint In_bool (a:nat) (l:list nat) : bool :=
+  match l with
+    | [] => false
+    | b :: m => (b =? a) || In_bool a m
+  end.
+
+Fixpoint does_not_contain_tid tid (tr:trace) : Prop :=
+  match tr with
+  | [] => True
+  | (tid', _) :: rest => tid <> tid' /\ does_not_contain_tid tid rest
+  end.
+
+(*
+The function checks if a trace is a serial trace by making sure that
+tid is only increaing as we traverse the trace
+In this function, we assume that the trace is in the correct order.
+That is, the first (tid*action) in the trace is actually the first one that gets to be executed
+*)
+Function check_is_serial_trace (tr: trace) : Prop :=
+  match tr with 
+  | [] => True
+  | (tid, x) :: rest =>
+    match rest with
+    | [] => True
+    | (tid', y) :: _ => (tid = tid' \/ trace_filter_tid tid rest = [])
+                        /\ check_is_serial_trace rest
+    end
+  end.
+
+(*
+This function executes STO trace in the reverse order
+The goal is to record all read and write actions of all *committed* transactions
+*)
+Function exec (sto_trace: trace) (commit_tid: list nat) : list (tid * action) :=
+  match sto_trace with
+  | [] => []
+  | (tid, action) :: tail => if (In_bool tid commit_tid)
+            then match action with
+                | read_item _ => (tid, action) :: exec tail commit_tid
+                | write_item _ => (tid, action) :: exec tail commit_tid
+                | _ => exec tail commit_tid
+                 end
+            else exec tail commit_tid
+  end.
+
+Eval compute in exec example_txn (seq_list example_txn).
+
+(*
+This function returns all values that is written in a trace to a memory location
+*)
+Function tid_write_value (trace: trace) : list value :=
+  match trace with
+  | [] => []
+  | (_, write_item val) :: tail => val :: tid_write_value tail
+  | _ :: tail => tid_write_value tail
+  end.
+
+(*
+This function returns a list of pair that records write values of each tids in the trace
+the first element in a pair is tid
+the second element is all the write values written by the transaction with the id tid
+*)
+Function get_write_value (trace: trace) (tids: list nat) : list (nat * (list value)):=
+  match tids with
+  | [] => []
+  | head :: tail => (head, tid_write_value (trace_filter_tid head trace)) :: get_write_value trace tail
+  end.
+
+
+Definition get_write_value_out (sto_trace: trace) : list (nat * (list value)) :=
+  get_write_value sto_trace (seq_list sto_trace).
+
+Eval compute in get_write_value_out example_txn.
+
+(*
+This function compares values in two lists one by one
+The value at each position in one list should be the same as that in the other list
+*)
+Function compare_value (ls1: list value) (ls2: list value): bool:=
+  match ls1, ls2 with
+  | [], [] => true
+  | _ , [] => false
+  | [], _ => false
+  | h1::t1, h2::t2 => if h1=?h2 then compare_value t1 t2 else false
+  end.
+
+(*
+We compare writes of two traces in this function
+If they have the same write sequence, then the function will return True
+****************************************************
+We assume that two traces have the same tids in the same sequence
+Should we actually add tid1 =? tid2 in the code to remove this assumption?
+****************************************************
+*)
+Function compare_write_list (ls1: list (nat * (list value))) (ls2:list (nat * (list value))): Prop :=
+  match ls1, ls2 with
+  | [], [] => True
+  | _ , [] => False
+  | [], _ => False
+  | (tid1, ver1)::t1, (tid2, ver2)::t2 
+        => if (tid1 =? tid2 ) && (compare_value ver1 ver2) then compare_write_list t1 t2
+            else False
+  end.
+
+Definition write_synchronization trace1 trace2: Prop:=
+  compare_write_list (get_write_value_out trace1) (get_write_value_out trace2).
+
+(*
+The function returns the last write value of a STO-trace
+*)
+Definition last_write_value trace: nat:=
+  trace_write_last (exec trace (seq_list trace)).
+
+Eval compute in last_write_value example_txn.
+(*
+Definition write_synchronization trace1 trace2: Prop:=
+  if (last_write_value trace1) =? (last_write_value trace2)
+  then True
+  else False.
+*)
+Eval compute in write_synchronization example_txn (create_serialized_trace example_txn (seq_list example_txn)).
+
+(*
+This function returns the version numbers of all the reads in a trace
+*)
+Function tid_read_version (trace: trace) : list version :=
+  match trace with
+  | [] => []
+  | (_, read_item ver) :: tail => ver :: tid_read_version tail
+  | _ :: tail => tid_read_version tail
+  end.
+
+(*
+This function groups all versions of reads of a transaction in a trace.
+This returns a list of pairs
+The first element of a pair is the tid
+The second element is a list of all versions of the reads from the transaction tid
+*)
+Function get_read_version (trace: trace) (tids: list nat) : list (nat * (list version)):=
+  match tids with
+  | [] => []
+  | head :: tail => (head, tid_read_version (trace_filter_tid head trace)) :: get_read_version trace tail
+  end.
+
+Definition get_read_version_out (trace: trace) : list (nat * (list version)) :=
+  get_read_version trace (seq_list trace).
+
+Eval compute in get_read_version_out example_txn.
+
+Eval compute in get_read_version_out example_txn2.
+
+(*
+This function compares all read versions of two list
+This is the same as compare all write in previous functions
+*)
+Function compare_version (ls1: list version) (ls2: list version): bool:=
+  match ls1, ls2 with
+  | [], [] => true
+  | _ , [] => false
+  | [], _ => false
+  | h1::t1, h2::t2 => if h1=?h2 then compare_version t1 t2 else false
+  end.
+
+Function compare_read_list (ls1: list (nat * (list version))) (ls2:list (nat * (list version))): Prop :=
+  match ls1, ls2 with
+  | [], [] => True
+  | _ , [] => False
+  | [], _ => False
+  | (tid1, ver1)::t1, (tid2, ver2)::t2 
+        => if (tid1 =? tid2 ) && (compare_version ver1 ver2) then compare_read_list t1 t2
+            else False
+  end.
+
+Definition read_synchronization trace1 trace2: Prop:=
+  compare_read_list (get_read_version_out trace1) (get_read_version_out trace2).
+
+Eval compute in read_synchronization example_txn (create_serialized_trace example_txn (seq_list example_txn)).
+
+Eval compute in compare_read_list [(1, [0;0]); (2, [1;1])] [(1, [0]);(2, [1;1])].
+
+(*
+Two traces can be considered equivalent in execution if they produce the same reads and writes
+*)
+Definition Exec_Equivalence trace1 trace2: Prop:=
+  write_synchronization trace1 trace2 /\ read_synchronization trace1 trace2.
+
+Eval compute in Exec_Equivalence example_txn (create_serialized_trace example_txn (seq_list example_txn)).
+
+
+(*
+Function create_serialized_trace (sto_trace: trace) (sto_trace_copy: trace): trace:=
+  match sto_trace with
+  | [] => []
+  | (tid, seq_point) :: tail
+    => trace_filter_tid tid sto_trace_copy ++ create_serialized_trace tail sto_trace_copy
+  | _ :: tail => create_serialized_trace tail sto_trace_copy
+  end.
+
+Eval compute in create_serialized_trace example_txn example_txn.
+
+Eval compute in create_serialized_trace example_txn2 example_txn2.
+
+Lemma serial_action_remove tid action t:
+  sto_trace ((tid, action) :: t) ->
+  ~ In (tid, seq_point) t -> 
+  create_serialized_trace t ((tid, action) :: t) = create_serialized_trace t t.
+Proof.
+  intros.
+  apply sto_trace_app in H.
+  induction H. 
+  simpl. auto.
+  simpl.
+Admitted.
+
+*)
 
 Lemma seq_point_before_commit (t:trace) (tid: tid):
   sto_trace ((tid, commit_txn) :: t) ->
@@ -977,40 +1138,6 @@ Qed.
 This function creates a serialized trace.
 Just like STO-trace, the order is reversed: that is, the first (tid*action) pair in the serial trace
 constructed by this function is the last operation performed in this trace
-*)
-
-Function create_serialized_trace (sto_trace: trace) (seqls : list nat): trace:=
-  match seqls with
-  | [] => []
-  | head :: tail 
-    => trace_filter_tid head sto_trace ++ create_serialized_trace sto_trace tail
-  end.
-
-(*
-Function create_serialized_trace (sto_trace: trace) (sto_trace_copy: trace): trace:=
-  match sto_trace with
-  | [] => []
-  | (tid, seq_point) :: tail
-    => trace_filter_tid tid sto_trace_copy ++ create_serialized_trace tail sto_trace_copy
-  | _ :: tail => create_serialized_trace tail sto_trace_copy
-  end.
-
-Eval compute in create_serialized_trace example_txn example_txn.
-
-Eval compute in create_serialized_trace example_txn2 example_txn2.
-
-Lemma serial_action_remove tid action t:
-  sto_trace ((tid, action) :: t) ->
-  ~ In (tid, seq_point) t -> 
-  create_serialized_trace t ((tid, action) :: t) = create_serialized_trace t t.
-Proof.
-  intros.
-  apply sto_trace_app in H.
-  induction H. 
-  simpl. auto.
-  simpl.
-Admitted.
-
 *)
 
 Lemma serial_action_remove tid action t:
@@ -1295,38 +1422,6 @@ Proof.
   admit.
 Admitted.
 
-(*
-Check whether an element a is in the list l
-*)
-Fixpoint In_bool (a:nat) (l:list nat) : bool :=
-  match l with
-    | [] => false
-    | b :: m => (b =? a) || In_bool a m
-  end.
-
-Fixpoint does_not_contain_tid tid (tr:trace) : Prop :=
-  match tr with
-  | [] => True
-  | (tid', _) :: rest => tid <> tid' /\ does_not_contain_tid tid rest
-  end.
-
-(*
-The function checks if a trace is a serial trace by making sure that
-tid is only increaing as we traverse the trace
-In this function, we assume that the trace is in the correct order.
-That is, the first (tid*action) in the trace is actually the first one that gets to be executed
-*)
-Function check_is_serial_trace (tr: trace) : Prop :=
-  match tr with 
-  | [] => True
-  | (tid, x) :: rest =>
-    match rest with
-    | [] => True
-    | (tid', y) :: _ => (tid = tid' \/ trace_filter_tid tid rest = [])
-                        /\ check_is_serial_trace rest
-    end
-  end.
-
 Lemma check_app a tr: 
   check_is_serial_trace (a :: tr) -> check_is_serial_trace tr.
 Proof.
@@ -1380,98 +1475,6 @@ Admitted.
 (***************************************************)
 
 
-(*
-This function executes STO trace in the reverse order
-The goal is to record all read and write actions of all *committed* transactions
-*)
-Function exec (sto_trace: trace) (commit_tid: list nat) : list (tid * action) :=
-  match sto_trace with
-  | [] => []
-  | (tid, action) :: tail => if (In_bool tid commit_tid)
-            then match action with
-                | read_item _ => (tid, action) :: exec tail commit_tid
-                | write_item _ => (tid, action) :: exec tail commit_tid
-                | _ => exec tail commit_tid
-                 end
-            else exec tail commit_tid
-  end.
-
-Eval compute in exec example_txn (seq_list example_txn).
-
-(*
-This function returns all values that is written in a trace to a memory location
-*)
-Function tid_write_value (trace: trace) : list value :=
-  match trace with
-  | [] => []
-  | (_, write_item val) :: tail => val :: tid_write_value tail
-  | _ :: tail => tid_write_value tail
-  end.
-
-(*
-This function returns a list of pair that records write values of each tids in the trace
-the first element in a pair is tid
-the second element is all the write values written by the transaction with the id tid
-*)
-Function get_write_value (trace: trace) (tids: list nat) : list (nat * (list value)):=
-  match tids with
-  | [] => []
-  | head :: tail => (head, tid_write_value (trace_filter_tid head trace)) :: get_write_value trace tail
-  end.
-
-
-Definition get_write_value_out (sto_trace: trace) : list (nat * (list value)) :=
-  get_write_value sto_trace (seq_list sto_trace).
-
-Eval compute in get_write_value_out example_txn.
-
-(*
-This function compares values in two lists one by one
-The value at each position in one list should be the same as that in the other list
-*)
-Function compare_value (ls1: list value) (ls2: list value): bool:=
-  match ls1, ls2 with
-  | [], [] => true
-  | _ , [] => false
-  | [], _ => false
-  | h1::t1, h2::t2 => if h1=?h2 then compare_value t1 t2 else false
-  end.
-
-(*
-We compare writes of two traces in this function
-If they have the same write sequence, then the function will return True
-****************************************************
-We assume that two traces have the same tids in the same sequence
-Should we actually add tid1 =? tid2 in the code to remove this assumption?
-****************************************************
-*)
-Function compare_write_list (ls1: list (nat * (list value))) (ls2:list (nat * (list value))): Prop :=
-  match ls1, ls2 with
-  | [], [] => True
-  | _ , [] => False
-  | [], _ => False
-  | (tid1, ver1)::t1, (tid2, ver2)::t2 
-        => if (tid1 =? tid2 ) && (compare_value ver1 ver2) then compare_write_list t1 t2
-            else False
-  end.
-
-Definition write_synchronization trace1 trace2: Prop:=
-  compare_write_list (get_write_value_out trace1) (get_write_value_out trace2).
-
-(*
-The function returns the last write value of a STO-trace
-*)
-Definition last_write_value trace: nat:=
-  trace_write_last (exec trace (seq_list trace)).
-
-Eval compute in last_write_value example_txn.
-(*
-Definition write_synchronization trace1 trace2: Prop:=
-  if (last_write_value trace1) =? (last_write_value trace2)
-  then True
-  else False.
-*)
-Eval compute in write_synchronization example_txn (create_serialized_trace example_txn (seq_list example_txn)).
 
 (*
 A STO-trace and its serial trace should have the same writes.
@@ -1503,63 +1506,6 @@ Admitted.
 Now we proceed to the read part of the proof.
 *)
 
-(*
-This function returns the version numbers of all the reads in a trace
-*)
-Function tid_read_version (trace: trace) : list version :=
-  match trace with
-  | [] => []
-  | (_, read_item ver) :: tail => ver :: tid_read_version tail
-  | _ :: tail => tid_read_version tail
-  end.
-
-(*
-This function groups all versions of reads of a transaction in a trace.
-This returns a list of pairs
-The first element of a pair is the tid
-The second element is a list of all versions of the reads from the transaction tid
-*)
-Function get_read_version (trace: trace) (tids: list nat) : list (nat * (list version)):=
-  match tids with
-  | [] => []
-  | head :: tail => (head, tid_read_version (trace_filter_tid head trace)) :: get_read_version trace tail
-  end.
-
-Definition get_read_version_out (trace: trace) : list (nat * (list version)) :=
-  get_read_version trace (seq_list trace).
-
-Eval compute in get_read_version_out example_txn.
-
-Eval compute in get_read_version_out example_txn2.
-
-(*
-This function compares all read versions of two list
-This is the same as compare all write in previous functions
-*)
-Function compare_version (ls1: list version) (ls2: list version): bool:=
-  match ls1, ls2 with
-  | [], [] => true
-  | _ , [] => false
-  | [], _ => false
-  | h1::t1, h2::t2 => if h1=?h2 then compare_version t1 t2 else false
-  end.
-
-Function compare_read_list (ls1: list (nat * (list version))) (ls2:list (nat * (list version))): Prop :=
-  match ls1, ls2 with
-  | [], [] => True
-  | _ , [] => False
-  | [], _ => False
-  | (tid1, ver1)::t1, (tid2, ver2)::t2 
-        => if (tid1 =? tid2 ) && (compare_version ver1 ver2) then compare_read_list t1 t2
-            else False
-  end.
-
-Definition read_synchronization trace1 trace2: Prop:=
-  compare_read_list (get_read_version_out trace1) (get_read_version_out trace2).
-
-Eval compute in read_synchronization example_txn (create_serialized_trace example_txn (seq_list example_txn)).
-
-Eval compute in compare_read_list [(1, [0;0]); (2, [1;1])] [(1, [0]);(2, [1;1])].
 
 (*
 A STO-trace and its serial trace should have the same reads.
@@ -1571,14 +1517,6 @@ Lemma read_consistency trace:
   -> read_synchronization trace (create_serialized_trace trace (seq_list trace)).
 Admitted.
 (***************************************************)
-
-(*
-Two traces can be considered equivalent in execution if they produce the same reads and writes
-*)
-Definition Exec_Equivalence trace1 trace2: Prop:=
-  write_synchronization trace1 trace2 /\ read_synchronization trace1 trace2.
-
-Eval compute in Exec_Equivalence example_txn (create_serialized_trace example_txn (seq_list example_txn)).
 
 (*
 The capstone theorem: prove serializability of a sto-trace
