@@ -695,7 +695,7 @@ Proof.
   simpl in H1. apply Forall_inv in H1. simpl in H1. auto.
 Qed.
 
-(*
+
 Lemma seq_point_after t1 t2 tid action:
   sto_trace ((tid, action) :: t1 ++ (tid, seq_point) :: t2)
   -> action = commit_txn (trace_complete_last (t1 ++ (tid, seq_point) :: t2)).
@@ -717,7 +717,7 @@ Proof.
   destruct a. 
   admit.
 Admitted.
-*)
+
 
 (* useless lemma
 Lemma seq_list_last_tid_dummy tid t:
@@ -802,7 +802,7 @@ Ltac remove_unrelevant_last_txn :=
       apply not_eq_sym in H; apply Nat.eqb_neq in H
 end.
 
-Lemma seq_list_commit tid t:
+Lemma seq_list_seq tid t:
   sto_trace t -> 
   trace_tid_last tid t = seq_point
   -> In tid (seq_list t).
@@ -819,6 +819,21 @@ Proof.
   right. auto.
 Qed.
 
+Lemma seq_list_complete tid t v:
+  sto_trace t -> 
+  trace_tid_last tid t = complete_write_item v
+  -> In tid (seq_list t).
+Proof.
+  intros.
+  induction H; simpl; try discriminate.
+  1, 3-4, 7, 10 : remove_unrelevant_last_txn; rewrite n in H3; apply IHsto_trace in H3; auto.
+  1, 3, 4: remove_unrelevant_last_txn; rewrite n in H4; apply IHsto_trace in H4; auto.
+  1: remove_unrelevant_last_txn; rewrite n in H5; apply IHsto_trace in H5; auto.
+  remove_unrelevant_last_txn.
+  admit.
+  rewrite n in H4. 
+  apply IHsto_trace in H4. auto.
+Admitted.
 
 Lemma seq_point_before_commit (t:trace) (tid: tid):
   sto_trace ((tid, commit_txn) :: t) ->
@@ -826,21 +841,31 @@ Lemma seq_point_before_commit (t:trace) (tid: tid):
 Proof.
   intros.
   inversion H.
-  apply seq_list_commit in H2.
+  destruct H2.
+  destruct H2.
+  apply seq_list_seq in H2.
+  apply trace_seqlist_seqpoint_rev in H2.
+  auto. auto.
+  apply seq_list_complete in H2.
   apply trace_seqlist_seqpoint_rev in H2.
   auto. auto.
 Qed.
 
-Lemma seq_point_before_commit2 t tid action:
+
+Lemma seq_point_before_commit2 t tid action v:
   sto_trace ((tid, action) :: t) ->
   In (tid, seq_point) t ->
-  action = commit_txn (trace_commit_complete_last t).
+  action = commit_txn \/ action = complete_write_item v.
+Proof.
+Admitted.
+(*
 Proof.
   intros.
   apply in_split in H0. destruct H0. destruct H0. rewrite H0 in H.
   apply seq_point_after in H.
   subst. auto.
-Qed. 
+Qed.
+*)
 
 (*
 Lemma seq_point_one_commit t:
@@ -848,7 +873,7 @@ Lemma seq_point_one_commit t:
   -> exists n, action = commit_txn n /\ *)
 Lemma seq_list_action tid action t:
   sto_trace ((tid, action) :: t) -> 
-  action = seq_point \/ action = commit_txn (trace_commit_complete_last t)
+  action = seq_point \/ action = commit_txn
   <-> In tid (seq_list ((tid, action) :: t)).
 Proof.
   split.
@@ -868,10 +893,12 @@ Proof.
 Qed.
 
 
-Lemma seq_list_action_neg tid action t:
+
+Lemma seq_list_action_neg tid action t v:
   sto_trace ((tid, action) :: t) -> 
-  action <> seq_point /\ action <> commit_txn (trace_commit_complete_last t)
+  action <> seq_point /\ action <> commit_txn /\ action <> complete_write_item v
   <-> ~ In tid (seq_list ((tid, action) :: t)).
+(*
 Proof.
   intros. split. 
   intros. 
@@ -889,6 +916,7 @@ Proof.
   assert (action = seq_point \/ action = commit_txn (trace_commit_complete_last t)). { right. auto. }
   apply H in H3. auto.
 Qed.
+*)
 
 Lemma seqlist_filter t t' tid:
   sto_trace t
@@ -978,9 +1006,9 @@ Proof.
   apply IHl in H2. rewrite H2. auto.
 Qed.
 
-Lemma serial_action_helper tid action t:
+Lemma serial_action_helper tid action t v:
   sto_trace ((tid, action) :: t) ->
-  action <> seq_point /\ action <> commit_txn (trace_commit_complete_last t)
+  action <> seq_point /\ action <> commit_txn /\ action <> complete_write_item v
   -> create_serialized_trace ((tid, action) :: t) (seq_list ((tid, action) :: t)) = 
      create_serialized_trace t (seq_list t).
 Proof.
