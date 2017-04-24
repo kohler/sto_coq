@@ -20,6 +20,16 @@ Definition store := NatMap.t value.
 Definition heap :=  address -> option (value * lock * version).
 Definition tid := nat.
 
+
+Ltac myauto :=
+  repeat match goal with
+  | |- context[_] =>
+      auto 100; intuition; cbn in *; simpl in *; auto 100
+  | |- context[_] =>
+      try contradiction; try discriminate
+end.
+
+
 Inductive action:=
 |dummy: action
 |start_txn: action
@@ -88,6 +98,21 @@ Returns dummy if there is no transaction with id tid.
 *)
 Definition trace_tid_last tid t: action :=
     hd dummy (map snd (trace_filter_tid tid t)).
+
+Ltac remove_unrelevant_last_txn :=
+  repeat match goal with
+  | [H: context[trace_tid_last ?tid ((?tid0, _) :: ?t) = _] |-_] =>
+      unfold trace_tid_last in H; inversion H;
+      destruct (Nat.eq_dec tid tid0); subst
+  | [H: context[hd _
+       (map snd
+          (if ?tid0 =? ?tid0
+           then (?tid0, ?x) :: trace_filter_tid ?tid0 ?t
+           else trace_filter_tid ?tid0 ?t)) = ?y] |-_] =>
+      rewrite <- beq_nat_refl in H; simpl in H; inversion H
+  | [H: context[?tid <> ?tid0] |-_] =>
+      apply not_eq_sym in H; apply Nat.eqb_neq in H
+end.
 
 (*
 Returns the version number of the last commit
@@ -166,19 +191,6 @@ Function length (tr: trace) : nat :=
 Returns True if there exists no lock_write_item
 Returns False if there exists locks
 *)
-(*
-WRONG
-*)
-(*
-Definition check_lock_or_unlock tr: Prop :=
-  match 
-    length (trace_filter_lock tr) <=? length (trace_filter_unlock tr)  
-  with 
-	| true => True
-	| false => False
-  end.
-*)
-
 Definition check_lock_or_unlock tr: Prop :=
   match 
     length (trace_filter_lock tr) <=? length (trace_filter_unlock tr)  
@@ -351,21 +363,6 @@ Inductive sto_trace : trace -> Prop :=
 			\/ trace_tid_last tid t = lock_write_item (*/\ ~ trace_no_writes tid t*)(*lock write*)
 			-> sto_trace t
 			-> sto_trace ((tid, validate_read_item (check_version (read_versions_tid tid t)  (trace_complete_last t) ))::t)
-
-(****************************************)
-(*| abort_readonly_txn_step: forall t tid,
-      trace_tid_last tid t = validate_read_item False (*invalid*)
-      /\ trace_no_writes tid t
-      -> sto_trace t
-      -> sto_trace ((tid, abort_txn) :: t)
-
-| abort_write_txn_step: forall t tid,
-      trace_tid_last tid t = validate_read_item False (*invalid*)
-      /\ ~ trace_no_writes tid t
-      -> sto_trace t
-      -> sto_trace ([(tid, abort_txn); (tid, unlock_write_item (trace_commit_last t))] ++ t)*)
-(****************************************)
-
 (*
 <<<<<<<<<<<<<<<<<<<>>>>>>>>>>>>>>>>>>>
 The other abort condition is not included here
@@ -389,35 +386,11 @@ THIS MODEL IS NOT COMPLETE
       -> trace_no_seq_points tid t
       -> sto_trace t
       -> sto_trace ((tid, seq_point) :: t)
-(*
-| complete_write_item_step: forall t tid,
-			trace_tid_last tid t = validate_read_item True (*valid read*)
-      /\ ~ trace_no_writes tid t
-      -> sto_trace t
-      -> sto_trace ((tid, complete_write_item (S (trace_commit_last t))) :: t)
-*)
 | complete_write_item_step: forall t tid,
       ~ trace_no_writes tid t
       -> trace_tid_last tid t = seq_point
       -> sto_trace t
       -> sto_trace ((tid, complete_write_item (S (trace_complete_last t))) :: t)
-(*| unlock_write_item_step: forall t tid ver,
-      trace_tid_last tid t = complete_write_item ver
-			/\ ~ trace_no_writes tid t (*locked*)
-      -> sto_trace t
-      -> sto_trace ((tid, unlock_write_item ver) :: t)*)
-
-(****************************************)
-(*| commit_readonly_txn_step: forall t tid,
-      (trace_tid_last tid t = validate_read_item True /\ trace_no_writes tid t)(*read only*)
-      -> sto_trace t
-      -> sto_trace ((tid, commit_txn (trace_commit_last t)) :: t)
-
-| commit_write_txn_step: forall t tid ver,
-      trace_tid_last tid t = unlock_write_item ver(*unlock the write*)
-      -> sto_trace t
-      -> sto_trace ((tid, commit_txn ver) :: t).*)
-(****************************************)
 | commit_txn_step: forall t tid ver,
       (trace_tid_last tid t = seq_point /\ trace_no_writes tid t)
       \/ (trace_tid_last tid t = complete_write_item ver)
@@ -432,38 +405,6 @@ Definition example_txn:=
 Definition example_txn2:=
 [(3, commit_txn); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn False); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn); (2, complete_write_item 1); (2, seq_point); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
 
-Lemma sto_trace_app tid action t:
-  sto_trace ((tid, action) :: t) -> sto_trace t.
-Proof.
-  intros.
-  inversion H; subst; auto.
-Qed.
-
-Lemma sto_trace_app2 t1 t2:
-  sto_trace (t1 ++ t2) -> sto_trace t2.
-Proof.
-  intros.
-  induction t1. rewrite app_nil_l in H. auto.
-  simpl in *. destruct a. 
-  apply sto_trace_app with (tid0 := t) (action0:= a) in H.
-  apply IHt1 in H. auto.
-Qed.
-(* some error with this lemma
-Lemma sto_trace_app2 tid tid0 action action0 t:
-  tid <> tid0 -> sto_trace ((tid, action) :: (tid0, action0) :: t) -> sto_trace ((tid, action) :: t).
-Proof.
-  intros.
-  inversion H0; subst.
-  apply sto_trace_app in H5. unfold trace_tid_last in H3; simpl in H3.
-  apply not_eq_sym in H. apply Nat.eqb_neq in H; rewrite H in H3.
-  apply start_txn_step with (tid := tid) in H5; [ auto | unfold trace_tid_last; auto ].
-  apply sto_trace_app in H6. unfold trace_tid_last in H4; simpl in H4.
-  apply not_eq_sym in H. apply Nat.eqb_neq in H; rewrite H in H4.
-  unfold check_lock_or_unlock in H5. unfold trace_filter_lock in H5.
-  unfold trace_filter_unlock in H5.
-  apply read_item_step with (tid := tid) (val := val) (oldver := oldver) in H6; [ auto | unfold trace_tid_last; auto | auto].
-Qed.
-*)
 
 (*
 Returns the serialized sequence of transactions in the STO trace based on seq_point of each transaction
@@ -490,308 +431,6 @@ Function seq_list (sto_trace: trace): list nat:=
 Eval compute in seq_list example_txn.
 
 Eval compute in seq_list example_txn2.
-
-Lemma seq_list_not_seqpoint tid action t:
-  sto_trace ((tid, action) :: t) ->
-  action <> seq_point -> 
-  ~ In tid (seq_list ((tid, action) :: t)) 
-  -> ~ In tid (seq_list t).
-Proof.
-  intros; destruct action; simpl in *; auto.
-Qed.
-
-Lemma seq_list_not_seqpoint2 tid action t:
-  sto_trace ((tid, action) :: t) ->
-  ~ In tid (seq_list ((tid, action) :: t)) 
-  -> ~ In tid (seq_list t).
-Proof.
-  intros; destruct action; simpl in *; auto.
-Qed.
-
-Lemma seq_list_seqpoint tid action t:
-  sto_trace ((tid, action) :: t) ->
-  action = seq_point -> 
-  In tid (seq_list ((tid, action) :: t)).
-Proof.
-  intros; subst; simpl.
-  left. auto.
-Qed.
-
-Lemma trace_seqlist_seqpoint t tid:
-  In (tid, seq_point) t
-  -> In tid (seq_list t).
-Proof.
-  intros.
-  functional induction seq_list t.
-  inversion H.
-  destruct (Nat.eq_dec tid tid0); subst; simpl.
-  left. auto.
-  right. apply IHl. apply in_inv in H. destruct H.
-  inversion H. apply Nat.eq_sym in H1. contradiction. auto.
-  all: destruct (Nat.eq_dec tid tid0); subst; apply IHl; apply in_inv in H; destruct H; try inversion H; auto.
-Qed.
-
-Lemma trace_seqlist_seqpoint_rev t tid:
-  In tid (seq_list t)
-  -> In (tid, seq_point) t.
-Proof.
-  intros.
-  functional induction seq_list t.
-  inversion H.
-  destruct (Nat.eq_dec tid tid0); subst; simpl; simpl in H. left. auto.
-  destruct H. apply eq_sym in H. congruence. apply IHl in H. right. auto.
-  all: destruct (Nat.eq_dec tid tid0); subst; apply in_cons; auto.
-Qed.
-
-Lemma filter_app (f: nat * action -> bool) l1 l2:
-  filter f (l1 ++ l2) = filter f l1 ++ filter f l2.
-Proof.
-  induction l1.
-  - simpl. auto.
-  - Search (filter).
-    simpl. remember (f a) as X. destruct X. 
-    simpl. rewrite IHl1. auto. auto.
-Qed.
-Lemma trace_filter_tid_app tid tr1 tr2:
-  trace_filter_tid tid (tr1 ++ tr2) =
-  trace_filter_tid tid tr1 ++ trace_filter_tid tid tr2.
-Proof.
-  unfold trace_filter_tid. 
-  apply filter_app.
-Qed.
-Lemma Forall_app (P: action -> Prop) l1 l2:
-    Forall P (l1 ++ l2) <-> Forall P l1 /\ Forall P l2.
-Proof.
-  split.
-  - intros. split;
-    rewrite Forall_forall in *. 
-    intros. Search (In _ ( _ ++ _ )).
-    assert (In x l1 \/ In x l2 -> In x (l1 ++ l2)). apply in_or_app.
-    assert (In x l1 \/ In x l2). left. auto. 
-    apply H1 in H2. auto.
-    intros.
-    assert (In x l1 \/ In x l2 -> In x (l1 ++ l2)). apply in_or_app.
-    assert (In x l1 \/ In x l2). right. auto. 
-    apply H1 in H2. auto.
-  - intros. destruct_pairs.
-    rewrite Forall_forall in *. Search (In _ ( _ ++ _ )).
-    intros.
-    apply in_app_or in H1.
-    (* firstorder. solved here*)
-    destruct H1.
-    apply H in H1. auto. apply H0 in H1. auto.
-Qed.
-
-Lemma seq_list_no_two_seqpoint t tid:
-  sto_trace ((tid, seq_point) :: t)
-  -> ~ In (tid, seq_point) t.
-Proof.
-  intros.
-  assert (sto_trace t). { apply sto_trace_app with (tid0 := tid) (action0 := seq_point). auto. }
-  inversion H.
-  intuition.
-  unfold trace_no_seq_points in H4.
-  apply in_split in H6.
-  destruct H6. destruct H3.
-  rewrite H3 in H4. simpl in H4.
-  rewrite trace_filter_tid_app in H4.
-  simpl in H4.
-  rewrite <-beq_nat_refl in H4. 
-  rewrite map_app in H4.
-  rewrite Forall_app in H4.
-  destruct H4. simpl in H6. 
-  apply Forall_inv in H6. simpl in H6. auto.
-  unfold trace_no_seq_points in H4.
-  apply in_split in H6.
-  destruct H6. destruct H6.
-  rewrite H6 in H4. simpl in H4.
-  rewrite trace_filter_tid_app in H4.
-  simpl in H4.
-  rewrite <-beq_nat_refl in H4. 
-  rewrite map_app in H4.
-  rewrite Forall_app in H4.
-  destruct H4. simpl in H7. 
-  apply Forall_inv in H7. simpl in H7. auto.
-Qed.
-
-Ltac myauto :=
-  repeat match goal with
-  | |- context[_] =>
-      auto 100; intuition; cbn in *; simpl in *; auto 100
-  | |- context[_] =>
-      try contradiction; try discriminate
-end.
-
-Lemma seq_list_no_two_seqpoint2 t1 t2 tid:
-  sto_trace (t1 ++ (tid, seq_point) :: t2)
-  -> ~ In (tid, seq_point) t1.
-Proof.
-  intros.
-  intuition.
-  apply in_split in H0. destruct H0. destruct H0.
-  rewrite H0 in H.
-  rewrite <- app_assoc in H.
-  apply sto_trace_app2 in H.
-  inversion H; subst.
-  unfold trace_no_seq_points in H4.
-  rewrite trace_filter_tid_app in H4.
-  rewrite map_app in H4. rewrite Forall_app in H4.
-  destruct H4. simpl in H1. rewrite <- beq_nat_refl in H1.
-  simpl in H1. apply Forall_inv in H1. simpl in H1. auto.
-Qed.
-
-
-
-Lemma seq_point_after t1 t2 tid action:
-  sto_trace ((tid, action) :: t1 ++ (tid, seq_point) :: t2)
-  -> action = commit_txn \/ action = complete_write_item (S (trace_complete_last (t1 ++ (tid, seq_point) :: t2))).
-Proof.
-  intros.
-  induction t1.
-  simpl in H.
-  - inversion H; subst.
-    -- simpl in H2. rewrite <- beq_nat_refl in H2. inversion H2.
-    -- unfold trace_tid_last in H3. simpl in H3. rewrite <- beq_nat_refl in H3. repeat destruct or H3; inversion H3.
-    -- unfold trace_tid_last in H2. simpl in H2. rewrite <- beq_nat_refl in H2. repeat destruct or H2; inversion H2.
-    -- unfold trace_tid_last in H2. simpl in H2. rewrite <- beq_nat_refl in H2. repeat destruct or H2; inversion H2.
-    -- unfold trace_tid_last in H5. simpl in H5. rewrite <- beq_nat_refl in H5. inversion H5.
-    -- unfold trace_tid_last in H4. simpl in H4. rewrite <- beq_nat_refl in H4. destruct H4. destruct H0. simpl in H0. inversion H0. simpl in H0. inversion H0.
-    -- unfold trace_tid_last in H2. simpl in H2. rewrite <- beq_nat_refl in H2. inversion H2.
-    -- unfold trace_tid_last in H3. simpl in H3. rewrite <- beq_nat_refl in H3. destruct H3. inversion H0. inversion H0. inversion H1.
-    -- unfold trace_tid_last in H4. simpl in H4. rewrite <- beq_nat_refl in H4. simpl in *. right. auto.
-    -- auto.
-  - destruct a. destruct a.
-    -- destruct (Nat.eq_dec tid t); subst; apply sto_trace_app in H; inversion H.
-    -- destruct (Nat.eq_dec tid t); subst.
-  admit.
-Admitted.
-
-
-(* useless lemma
-Lemma seq_list_last_tid_dummy tid t:
-  sto_trace t ->
-  In tid (seq_list t) ->
-  trace_tid_last tid t <> dummy.
-Proof.
-  intros ST; induction ST; intros.
-  all: cbn in *.
-  contradiction.
-  all: unfold trace_tid_last; simpl.
-  all: destruct (Nat.eq_dec tid0 tid);
-    [ subst; rewrite <- beq_nat_refl; cbn; discriminate | ].
-  all: apply Nat.eqb_neq in n; rewrite n.
-  all: try apply IHST in H0; auto.
-  apply in_app_or in H1.
-  destruct H1. apply IHST in H1; auto.
-  simpl in H1. destruct H1. apply Nat.eqb_neq in n. contradiction. inversion H1.
-Qed.
-*)
-Lemma seq_list_last_tid_start_txn tid t:
-  sto_trace t ->
-  In tid (seq_list t) ->
-  trace_tid_last tid t <> start_txn.
-Proof.
-  intros ST; induction ST; intros.
-  all: cbn in *.
-  contradiction.
-  all: unfold trace_tid_last; simpl; destruct (Nat.eq_dec tid0 tid); [subst |].
-  apply trace_seqlist_seqpoint_rev in H0.
-  apply in_split in H0. destruct H0. destruct H0.
-  rewrite H0 in H. rewrite trace_filter_tid_app in H. simpl in H.
-  rewrite <- beq_nat_refl in H. apply app_eq_nil in H. destruct H.
-  inversion H1.
-  apply IHST in H0. unfold trace_tid_last in H0.
-  apply Nat.eqb_neq in n; rewrite n. auto.
-
-  all: try rewrite <- beq_nat_refl; simpl; try congruence.
-  all: apply Nat.eqb_neq in n; rewrite n; try apply IHST in H1; auto.
-  
-  apply Nat.eqb_neq in n. destruct H1. congruence.
-  apply IHST in H1; auto.
-Qed.
-(*
-Lemma seq_list_last_tid_read_item tid t:
-  sto_trace t ->
-  In tid (seq_list t) ->
-  exists ver, trace_tid_last tid t <> read_item ver.
-Proof.
-  intros ST; induction ST; intros.
-  all: cbn in *.
-  contradiction.
-  all: unfold trace_tid_last; simpl; destruct (Nat.eq_dec tid0 tid); [subst |].
-  apply trace_seqlist_seqpoint_rev in H0.
-  apply in_split in H0. destruct H0. destruct H0.
-  rewrite H0 in H. rewrite trace_filter_tid_app in H. simpl in H.
-  rewrite <- beq_nat_refl in H. apply app_eq_nil in H. destruct H.
-  inversion H1.
-  apply IHST in H0. unfold trace_tid_last in H0.
-  apply Nat.eqb_neq in n; rewrite n. auto.
-
-  all: try rewrite <- beq_nat_refl; simpl; try congruence.
-  all: apply Nat.eqb_neq in n; rewrite n; try apply IHST in H1; auto.
-  
-  apply Nat.eqb_neq in n. apply in_app_or in H1. destruct H1.
-  apply IHST in H1; auto.
-  simpl in H1. destruct H1. congruence. contradiction.
-Qed.*)
-
-Ltac remove_unrelevant_last_txn :=
-  repeat match goal with
-  | [H: context[trace_tid_last ?tid ((?tid0, _) :: ?t) = _] |-_] =>
-      unfold trace_tid_last in H; inversion H;
-      destruct (Nat.eq_dec tid tid0); subst
-  | [H: context[hd _
-       (map snd
-          (if ?tid0 =? ?tid0
-           then (?tid0, ?x) :: trace_filter_tid ?tid0 ?t
-           else trace_filter_tid ?tid0 ?t)) = ?y] |-_] =>
-      rewrite <- beq_nat_refl in H; simpl in H; inversion H
-  | [H: context[?tid <> ?tid0] |-_] =>
-      apply not_eq_sym in H; apply Nat.eqb_neq in H
-end.
-
-Lemma seq_list_seq tid t:
-  sto_trace t -> 
-  trace_tid_last tid t = seq_point
-  -> In tid (seq_list t).
-Proof.
-  intros.
-  induction H; simpl; try discriminate.
-  1, 3-4, 7, 10 : remove_unrelevant_last_txn; rewrite n in H3; apply IHsto_trace in H3; auto.
-  1, 3, 5: remove_unrelevant_last_txn; rewrite n in H4; apply IHsto_trace in H4; auto.
-  1: remove_unrelevant_last_txn; rewrite n in H5; apply IHsto_trace in H5; auto.
-  remove_unrelevant_last_txn.
-  left. auto.
-  rewrite n in H4. 
-  apply IHsto_trace in H4. 
-  right. auto.
-Qed.
-
-Lemma same_version v1 v2:
-  complete_write_item v1 = complete_write_item v2
-  -> v1 = v2.
-Admitted.
-
-Lemma seq_list_complete tid t:
-  sto_trace t -> 
-  trace_tid_last tid t = complete_write_item (S (trace_complete_last t))
-  -> In tid (seq_list t).
-Proof.
-  intros.
-  induction H; simpl; try discriminate.
-  1, 3-4, 7, 10 : remove_unrelevant_last_txn; rewrite n in H3; apply IHsto_trace in H3; auto.
-  1, 3, 4: remove_unrelevant_last_txn; rewrite n in H4; apply IHsto_trace in H4; auto.
-  1: remove_unrelevant_last_txn; rewrite n in H5; apply IHsto_trace in H5; auto.
-  remove_unrelevant_last_txn.
-  simpl in *. rewrite <- beq_nat_refl in H0; simpl in *.
-  assert (trace_complete_last t <>
-     trace_complete_last
-       ((tid0, complete_write_item (S (trace_complete_last t))) :: t)).
-  admit.
-  rewrite H5 in H3. myauto. Search (S _ = S _). apply eq_S in H5. apply H3 in H5. inversion H5.
-  rewrite n in H4.
-  myauto.
-Admitted.
 
 Function create_serialized_trace (sto_trace: trace) (seqls : list nat): trace:=
   match seqls with
@@ -870,7 +509,6 @@ Function get_write_value (trace: trace) (tids: list nat) : list (nat * (list val
   | [] => []
   | head :: tail => (head, tid_write_value (trace_filter_tid head trace)) :: get_write_value trace tail
   end.
-
 
 Definition get_write_value_out (sto_trace: trace) : list (nat * (list value)) :=
   get_write_value sto_trace (seq_list sto_trace).
@@ -1018,6 +656,298 @@ Proof.
 Admitted.
 
 *)
+
+Lemma sto_trace_app tid action t:
+  sto_trace ((tid, action) :: t) -> sto_trace t.
+Proof.
+  intros.
+  inversion H; subst; auto.
+Qed.
+
+Lemma sto_trace_app2 t1 t2:
+  sto_trace (t1 ++ t2) -> sto_trace t2.
+Proof.
+  intros.
+  induction t1. rewrite app_nil_l in H. auto.
+  simpl in *. destruct a. 
+  apply sto_trace_app with (tid0 := t) (action0:= a) in H.
+  apply IHt1 in H. auto.
+Qed.
+(* some error with this lemma
+Lemma sto_trace_app2 tid tid0 action action0 t:
+  tid <> tid0 -> sto_trace ((tid, action) :: (tid0, action0) :: t) -> sto_trace ((tid, action) :: t).
+Proof.
+  intros.
+  inversion H0; subst.
+  apply sto_trace_app in H5. unfold trace_tid_last in H3; simpl in H3.
+  apply not_eq_sym in H. apply Nat.eqb_neq in H; rewrite H in H3.
+  apply start_txn_step with (tid := tid) in H5; [ auto | unfold trace_tid_last; auto ].
+  apply sto_trace_app in H6. unfold trace_tid_last in H4; simpl in H4.
+  apply not_eq_sym in H. apply Nat.eqb_neq in H; rewrite H in H4.
+  unfold check_lock_or_unlock in H5. unfold trace_filter_lock in H5.
+  unfold trace_filter_unlock in H5.
+  apply read_item_step with (tid := tid) (val := val) (oldver := oldver) in H6; [ auto | unfold trace_tid_last; auto | auto].
+Qed.
+*)
+
+Lemma seq_list_not_seqpoint tid action t:
+  sto_trace ((tid, action) :: t) ->
+  action <> seq_point -> 
+  ~ In tid (seq_list ((tid, action) :: t)) 
+  -> ~ In tid (seq_list t).
+Proof.
+  intros; destruct action; simpl in *; auto.
+Qed.
+
+Lemma seq_list_not_seqpoint2 tid action t:
+  sto_trace ((tid, action) :: t) ->
+  ~ In tid (seq_list ((tid, action) :: t)) 
+  -> ~ In tid (seq_list t).
+Proof.
+  intros; destruct action; simpl in *; auto.
+Qed.
+
+Lemma seq_list_seqpoint tid action t:
+  sto_trace ((tid, action) :: t) ->
+  action = seq_point -> 
+  In tid (seq_list ((tid, action) :: t)).
+Proof.
+  intros; subst; simpl.
+  left. auto.
+Qed.
+
+Lemma trace_seqlist_seqpoint t tid:
+  In (tid, seq_point) t
+  -> In tid (seq_list t).
+Proof.
+  intros.
+  functional induction seq_list t.
+  inversion H.
+  destruct (Nat.eq_dec tid tid0); subst; simpl.
+  left. auto.
+  right. apply IHl. apply in_inv in H. destruct H.
+  inversion H. apply Nat.eq_sym in H1. contradiction. auto.
+  all: destruct (Nat.eq_dec tid tid0); subst; apply IHl; apply in_inv in H; destruct H; try inversion H; auto.
+Qed.
+
+Lemma trace_seqlist_seqpoint_rev t tid:
+  In tid (seq_list t)
+  -> In (tid, seq_point) t.
+Proof.
+  intros.
+  functional induction seq_list t.
+  inversion H.
+  destruct (Nat.eq_dec tid tid0); subst; simpl; simpl in H. left. auto.
+  destruct H. apply eq_sym in H. congruence. apply IHl in H. right. auto.
+  all: destruct (Nat.eq_dec tid tid0); subst; apply in_cons; auto.
+Qed.
+
+Lemma filter_app (f: nat * action -> bool) l1 l2:
+  filter f (l1 ++ l2) = filter f l1 ++ filter f l2.
+Proof.
+  induction l1.
+  - simpl. auto.
+  - Search (filter).
+    simpl. remember (f a) as X. destruct X. 
+    simpl. rewrite IHl1. auto. auto.
+Qed.
+Lemma trace_filter_tid_app tid tr1 tr2:
+  trace_filter_tid tid (tr1 ++ tr2) =
+  trace_filter_tid tid tr1 ++ trace_filter_tid tid tr2.
+Proof.
+  unfold trace_filter_tid. 
+  apply filter_app.
+Qed.
+Lemma Forall_app (P: action -> Prop) l1 l2:
+    Forall P (l1 ++ l2) <-> Forall P l1 /\ Forall P l2.
+Proof.
+  split.
+  - intros. split;
+    rewrite Forall_forall in *. 
+    intros. Search (In _ ( _ ++ _ )).
+    assert (In x l1 \/ In x l2 -> In x (l1 ++ l2)). apply in_or_app.
+    assert (In x l1 \/ In x l2). left. auto. 
+    apply H1 in H2. auto.
+    intros.
+    assert (In x l1 \/ In x l2 -> In x (l1 ++ l2)). apply in_or_app.
+    assert (In x l1 \/ In x l2). right. auto. 
+    apply H1 in H2. auto.
+  - intros. destruct_pairs.
+    rewrite Forall_forall in *. Search (In _ ( _ ++ _ )).
+    intros.
+    apply in_app_or in H1.
+    (* firstorder. solved here*)
+    destruct H1.
+    apply H in H1. auto. apply H0 in H1. auto.
+Qed.
+
+Lemma seq_list_no_two_seqpoint t tid:
+  sto_trace ((tid, seq_point) :: t)
+  -> ~ In (tid, seq_point) t.
+Proof.
+  intros.
+  assert (sto_trace t). { apply sto_trace_app with (tid0 := tid) (action0 := seq_point). auto. }
+  inversion H.
+  intuition.
+  unfold trace_no_seq_points in H4.
+  apply in_split in H6.
+  destruct H6. destruct H3.
+  rewrite H3 in H4. simpl in H4.
+  rewrite trace_filter_tid_app in H4.
+  simpl in H4.
+  rewrite <-beq_nat_refl in H4. 
+  rewrite map_app in H4.
+  rewrite Forall_app in H4.
+  destruct H4. simpl in H6. 
+  apply Forall_inv in H6. simpl in H6. auto.
+  unfold trace_no_seq_points in H4.
+  apply in_split in H6.
+  destruct H6. destruct H6.
+  rewrite H6 in H4. simpl in H4.
+  rewrite trace_filter_tid_app in H4.
+  simpl in H4.
+  rewrite <-beq_nat_refl in H4. 
+  rewrite map_app in H4.
+  rewrite Forall_app in H4.
+  destruct H4. simpl in H7. 
+  apply Forall_inv in H7. simpl in H7. auto.
+Qed.
+
+Lemma seq_list_no_two_seqpoint2 t1 t2 tid:
+  sto_trace (t1 ++ (tid, seq_point) :: t2)
+  -> ~ In (tid, seq_point) t1.
+Proof.
+  intros.
+  intuition.
+  apply in_split in H0. destruct H0. destruct H0.
+  rewrite H0 in H.
+  rewrite <- app_assoc in H.
+  apply sto_trace_app2 in H.
+  inversion H; subst.
+  unfold trace_no_seq_points in H4.
+  rewrite trace_filter_tid_app in H4.
+  rewrite map_app in H4. rewrite Forall_app in H4.
+  destruct H4. simpl in H1. rewrite <- beq_nat_refl in H1.
+  simpl in H1. apply Forall_inv in H1. simpl in H1. auto.
+Qed.
+
+
+
+Lemma seq_point_after t1 t2 tid action:
+  sto_trace ((tid, action) :: t1 ++ (tid, seq_point) :: t2)
+  -> action = commit_txn \/ action = complete_write_item (S (trace_complete_last (t1 ++ (tid, seq_point) :: t2))).
+Proof.
+  intros.
+  induction t1.
+  simpl in H.
+  - inversion H; subst.
+    -- simpl in H2. rewrite <- beq_nat_refl in H2. inversion H2.
+    -- unfold trace_tid_last in H3. simpl in H3. rewrite <- beq_nat_refl in H3. repeat destruct or H3; inversion H3.
+    -- unfold trace_tid_last in H2. simpl in H2. rewrite <- beq_nat_refl in H2. repeat destruct or H2; inversion H2.
+    -- unfold trace_tid_last in H2. simpl in H2. rewrite <- beq_nat_refl in H2. repeat destruct or H2; inversion H2.
+    -- unfold trace_tid_last in H5. simpl in H5. rewrite <- beq_nat_refl in H5. inversion H5.
+    -- unfold trace_tid_last in H4. simpl in H4. rewrite <- beq_nat_refl in H4. destruct H4. destruct H0. simpl in H0. inversion H0. simpl in H0. inversion H0.
+    -- unfold trace_tid_last in H2. simpl in H2. rewrite <- beq_nat_refl in H2. inversion H2.
+    -- unfold trace_tid_last in H3. simpl in H3. rewrite <- beq_nat_refl in H3. destruct H3. inversion H0. inversion H0. inversion H1.
+    -- unfold trace_tid_last in H4. simpl in H4. rewrite <- beq_nat_refl in H4. simpl in *. right. auto.
+    -- auto.
+  - destruct a. destruct a.
+    -- destruct (Nat.eq_dec tid t); subst; apply sto_trace_app in H; inversion H.
+    -- destruct (Nat.eq_dec tid t); subst.
+  admit.
+Admitted.
+
+Lemma seq_list_last_tid_start_txn tid t:
+  sto_trace t ->
+  In tid (seq_list t) ->
+  trace_tid_last tid t <> start_txn.
+Proof.
+  intros ST; induction ST; intros.
+  all: cbn in *.
+  contradiction.
+  all: unfold trace_tid_last; simpl; destruct (Nat.eq_dec tid0 tid); [subst |].
+  apply trace_seqlist_seqpoint_rev in H0.
+  apply in_split in H0. destruct H0. destruct H0.
+  rewrite H0 in H. rewrite trace_filter_tid_app in H. simpl in H.
+  rewrite <- beq_nat_refl in H. apply app_eq_nil in H. destruct H.
+  inversion H1.
+  apply IHST in H0. unfold trace_tid_last in H0.
+  apply Nat.eqb_neq in n; rewrite n. auto.
+
+  all: try rewrite <- beq_nat_refl; simpl; try congruence.
+  all: apply Nat.eqb_neq in n; rewrite n; try apply IHST in H1; auto.
+  
+  apply Nat.eqb_neq in n. destruct H1. congruence.
+  apply IHST in H1; auto.
+Qed.
+(*
+Lemma seq_list_last_tid_read_item tid t:
+  sto_trace t ->
+  In tid (seq_list t) ->
+  exists ver, trace_tid_last tid t <> read_item ver.
+Proof.
+  intros ST; induction ST; intros.
+  all: cbn in *.
+  contradiction.
+  all: unfold trace_tid_last; simpl; destruct (Nat.eq_dec tid0 tid); [subst |].
+  apply trace_seqlist_seqpoint_rev in H0.
+  apply in_split in H0. destruct H0. destruct H0.
+  rewrite H0 in H. rewrite trace_filter_tid_app in H. simpl in H.
+  rewrite <- beq_nat_refl in H. apply app_eq_nil in H. destruct H.
+  inversion H1.
+  apply IHST in H0. unfold trace_tid_last in H0.
+  apply Nat.eqb_neq in n; rewrite n. auto.
+
+  all: try rewrite <- beq_nat_refl; simpl; try congruence.
+  all: apply Nat.eqb_neq in n; rewrite n; try apply IHST in H1; auto.
+  
+  apply Nat.eqb_neq in n. apply in_app_or in H1. destruct H1.
+  apply IHST in H1; auto.
+  simpl in H1. destruct H1. congruence. contradiction.
+Qed.*)
+
+Lemma seq_list_seq tid t:
+  sto_trace t -> 
+  trace_tid_last tid t = seq_point
+  -> In tid (seq_list t).
+Proof.
+  intros.
+  induction H; simpl; try discriminate.
+  1, 3-4, 7, 10 : remove_unrelevant_last_txn; rewrite n in H3; apply IHsto_trace in H3; auto.
+  1, 3, 5: remove_unrelevant_last_txn; rewrite n in H4; apply IHsto_trace in H4; auto.
+  1: remove_unrelevant_last_txn; rewrite n in H5; apply IHsto_trace in H5; auto.
+  remove_unrelevant_last_txn.
+  left. auto.
+  rewrite n in H4. 
+  apply IHsto_trace in H4. 
+  right. auto.
+Qed.
+
+Lemma same_version v1 v2:
+  complete_write_item v1 = complete_write_item v2
+  -> v1 = v2.
+Admitted.
+
+Lemma seq_list_complete tid t:
+  sto_trace t -> 
+  trace_tid_last tid t = complete_write_item (S (trace_complete_last t))
+  -> In tid (seq_list t).
+Proof.
+  intros.
+  induction H; simpl; try discriminate.
+  1, 3-4, 7, 10 : remove_unrelevant_last_txn; rewrite n in H3; apply IHsto_trace in H3; auto.
+  1, 3, 4: remove_unrelevant_last_txn; rewrite n in H4; apply IHsto_trace in H4; auto.
+  1: remove_unrelevant_last_txn; rewrite n in H5; apply IHsto_trace in H5; auto.
+  remove_unrelevant_last_txn.
+  simpl in *. rewrite <- beq_nat_refl in H0; simpl in *.
+  assert (trace_complete_last t <>
+     trace_complete_last
+       ((tid0, complete_write_item (S (trace_complete_last t))) :: t)).
+  admit.
+  rewrite H5 in H3. myauto. Search (S _ = S _). apply eq_S in H5. apply H3 in H5. inversion H5.
+  rewrite n in H4.
+  myauto.
+Admitted.
 
 Lemma seq_point_before_commit (t:trace) (tid: tid):
   sto_trace ((tid, commit_txn) :: t) ->
