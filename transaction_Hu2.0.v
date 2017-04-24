@@ -928,9 +928,9 @@ Lemma same_version v1 v2:
   -> v1 = v2.
 Admitted.
 
-Lemma seq_list_complete tid t:
+Lemma seq_list_complete tid t ver:
   sto_trace t -> 
-  trace_tid_last tid t = complete_write_item (S (trace_complete_last t))
+  trace_tid_last tid t = complete_write_item ver
   -> In tid (seq_list t).
 Proof.
   intros.
@@ -940,14 +940,10 @@ Proof.
   1: remove_unrelevant_last_txn; rewrite n in H5; apply IHsto_trace in H5; auto.
   remove_unrelevant_last_txn.
   simpl in *. rewrite <- beq_nat_refl in H0; simpl in *.
-  assert (trace_complete_last t <>
-     trace_complete_last
-       ((tid0, complete_write_item (S (trace_complete_last t))) :: t)).
-  admit.
-  rewrite H5 in H3. myauto. Search (S _ = S _). apply eq_S in H5. apply H3 in H5. inversion H5.
+  apply seq_list_seq in H1. auto. auto.
   rewrite n in H4.
-  myauto.
-Admitted.
+  apply IHsto_trace in H4. myauto.
+Qed.
 
 Lemma seq_point_before_commit (t:trace) (tid: tid):
   sto_trace ((tid, commit_txn) :: t) ->
@@ -965,26 +961,6 @@ Proof.
   auto. auto.
 Qed.
 
-
-Lemma seq_point_before_commit2 t tid action v:
-  sto_trace ((tid, action) :: t) ->
-  In (tid, seq_point) t ->
-  action = commit_txn \/ action = complete_write_item v.
-Proof.
-Admitted.
-(*
-Proof.
-  intros.
-  apply in_split in H0. destruct H0. destruct H0. rewrite H0 in H.
-  apply seq_point_after in H.
-  subst. auto.
-Qed.
-*)
-
-(*
-Lemma seq_point_one_commit t:
-  sto_trace ((tid, action) :: t1 ++ (tid, seq_point) :: t2) 
-  -> exists n, action = commit_txn n /\ *)
 Lemma seq_list_action tid action t:
   sto_trace ((tid, action) :: t) -> 
   action = seq_point \/ action = commit_txn \/ action = complete_write_item (S (trace_complete_last t))
@@ -994,7 +970,12 @@ Proof.
   intros. destruct H0.
   apply seq_list_seqpoint; auto.
   subst. inversion H; subst.
-  simpl. apply seq_list_complete; auto.
+  simpl.
+  1-8: destruct H0; inversion H0.
+  simpl. apply seq_list_seq in H5. auto. auto.
+  destruct H3. destruct H1. simpl. 
+  apply seq_list_seq in H1; auto.
+  apply seq_list_complete in H1; auto.
   
   intros.
   apply trace_seqlist_seqpoint_rev in H0.
@@ -1002,35 +983,40 @@ Proof.
   destruct H0.
   inversion H0. left. auto.
   right.
-  apply seq_point_before_commit2 with (action0 := action) in H0.
-  destruct H0. auto. auto.
+  apply in_split in H0. destruct H0. destruct H0. rewrite H0 in *.
+  apply seq_point_after in H. auto.
 Qed.
 
 
 
-Lemma seq_list_action_neg tid action t v:
+Lemma seq_list_action_neg tid action t:
   sto_trace ((tid, action) :: t) -> 
-  action <> seq_point /\ action <> commit_txn /\ action <> complete_write_item v
+  action <> seq_point /\ action <> commit_txn /\ action <> complete_write_item (S (trace_complete_last t))
   <-> ~ In tid (seq_list ((tid, action) :: t)).
-(*
 Proof.
   intros. split. 
   intros. 
   intuition.
   apply seq_list_action in H .
-  destruct H. apply H0 in H1. destruct H1; auto.
+  destruct H. apply H3 in H1. 
+  destruct H1; auto. destruct H1; auto. 
+
   intros.
   intuition.
   apply seq_list_action in H .
   destruct H.
-  assert (action = seq_point \/ action = commit_txn (trace_commit_complete_last t)). { left. auto. }
+  assert (action = seq_point \/ action = commit_txn \/ action = complete_write_item (S (trace_complete_last t))). { left. auto. }
   apply H in H3. auto.
   apply seq_list_action in H .
   destruct H.
-  assert (action = seq_point \/ action = commit_txn (trace_commit_complete_last t)). { right. auto. }
+  assert (action = seq_point \/ action = commit_txn \/ action = complete_write_item (S (trace_complete_last t))). { right. left.  auto. }
+  apply H in H3. auto.
+  apply seq_list_action in H .
+  destruct H.
+  assert (action = seq_point \/ action = commit_txn \/ action = complete_write_item (S (trace_complete_last t))). { right. right.  auto. }
   apply H in H3. auto.
 Qed.
-*)
+
 
 Lemma seqlist_filter t t' tid:
   sto_trace t
@@ -1086,9 +1072,9 @@ Proof.
   apply IHl in H2. rewrite H2. auto.
 Qed.
 
-Lemma serial_action_helper tid action t v:
+Lemma serial_action_helper tid action t:
   sto_trace ((tid, action) :: t) ->
-  action <> seq_point /\ action <> commit_txn /\ action <> complete_write_item v
+  action <> seq_point /\ action <> commit_txn /\ action <> complete_write_item (S (trace_complete_last t))
   -> create_serialized_trace ((tid, action) :: t) (seq_list ((tid, action) :: t)) = 
      create_serialized_trace t (seq_list t).
 Proof.
@@ -1102,7 +1088,7 @@ Proof.
 
   apply seq_list_action_neg in H. destruct H. apply H in H0.
   apply seq_list_not_seqpoint2 in H1; [ | auto ].
-  apply serial_action_remove with (action0 := read_item (trace_commit_last t)) in H1; [auto | auto].
+  apply serial_action_remove with (action0 := read_item (trace_complete_last t)) in H1; [auto | auto].
 
   apply seq_list_action_neg in H. destruct H. apply H in H0.
   apply seq_list_not_seqpoint2 in H1; [ | auto ].
@@ -1119,24 +1105,15 @@ Proof.
   apply seq_list_action_neg in H. destruct H. apply H in H0.
   apply seq_list_not_seqpoint2 in H1; [ | auto ].
   apply serial_action_remove with (action0 := validate_read_item
-     (check_version (read_versions_tid tid t) (trace_commit_last t))) in H1; [auto | auto].
+     (check_version (read_versions_tid tid t) (trace_complete_last t))) in H1; [auto | auto].
 
   apply seq_list_action_neg in H. destruct H. apply H in H0.
   apply seq_list_not_seqpoint2 in H1; [ | auto ].
-  apply serial_action_remove with (action0 := abort_txn) in H1; [auto | auto].
+  apply serial_action_remove with (action0 := abort_txn (trace_has_locks tid t)) in H1; [auto | auto].
 
-  apply seq_list_action_neg in H. destruct H. apply H in H0.
-  apply seq_list_not_seqpoint2 in H1; [ | auto ].
-  apply serial_action_remove with (action0 := complete_write_item (S (trace_commit_last t))) in H1; [auto | auto].
-
-  apply seq_list_action_neg in H. destruct H. apply H in H0.
-  simpl in H0. 
-  assert (~ In tid (seq_list t) /\ ~ In tid [tid]). { intuition. }
-  simpl in H4. destruct H4. intuition H5.
-  
-  apply seq_list_action_neg in H. destruct H. apply H in H0.
-  apply seq_list_not_seqpoint2 in H1; [ | auto ].
-  apply serial_action_remove with (action0 := commit_txn (trace_commit_complete_last t)) in H1; [auto | auto].
+  destruct H0. congruence.
+  destruct H0. destruct H3. congruence.
+  destruct H0. destruct H3. congruence.
 Qed.
 
 Lemma serial_action_helper2 tid t:
@@ -1186,6 +1163,7 @@ Proof.
   apply app_assoc.
 Qed.
 
+(*
 Lemma serial_action_before_commit tid t1 t2 t:
   sto_trace t
   -> t = t1 ++ (tid, seq_point) :: t2
@@ -1204,7 +1182,8 @@ Proof.
   induction (seq_list t1).
   simpl in *. rewrite <- beq_nat_refl. auto.*)
 Admitted.
-
+*)
+(*
 Lemma seq_list_equal trace:
   sto_trace trace -> 
   seq_list (create_serialized_trace trace (seq_list trace)) = seq_list trace.
@@ -1248,7 +1227,8 @@ Proof.
   rewrite <- IHsto_trace. rewrite H4.
   rewrite <- seq_list_split_no_seqpoint. auto. auto. auto. auto. 
 Qed.
-
+*)
+(*
 Lemma serial_action_add tid t:
   sto_trace t
   -> sto_trace (create_serialized_trace t (seq_list t))
@@ -1269,7 +1249,8 @@ Proof.
   simpl in H3. apply not_or_and in H3. destruct H3.
   apply IHt0 in H4.
 Admitted.
- 
+ *)
+(*
 Lemma sto_trace_single tid t:
   sto_trace ((tid, seq_point) :: t)
   -> sto_trace (create_serialized_trace t (seq_list t))
@@ -1298,6 +1279,7 @@ Proof.
   assert (trace_commit_last t0) = 
 *)
 Admitted.
+*)
 
 Lemma is_sto_trace trace:
   sto_trace trace ->
@@ -1319,16 +1301,20 @@ Proof.
   apply try_commit_txn_step in H; [ | auto].
   apply serial_action_helper in H. simpl in H. rewrite <- H in IHsto_trace. auto. split; intuition; inversion H1.
 
-  apply lock_write_item_step in H; [ | auto | auto].
-  apply serial_action_helper in H. simpl in H. rewrite <- H in IHsto_trace. auto. split; intuition; inversion H2.
+  apply lock_write_item_step in H; [ | auto | auto | auto].
+  apply serial_action_helper in H. simpl in H. rewrite <- H in IHsto_trace. auto. split; intuition; inversion H3.
 
-  apply validate_read_item_step in H; [ | auto ].
-  apply serial_action_helper in H. simpl in H. rewrite <- H in IHsto_trace. auto. split; intuition; inversion H1.
+  apply validate_read_item_step in H; [ | auto| auto].
+  apply serial_action_helper in H. simpl in H. rewrite <- H in IHsto_trace. auto. split; intuition; inversion H2; inversion H0.
 
   apply abort_txn_step in H; [ | auto].
   apply serial_action_helper in H. simpl in H. rewrite <- H in IHsto_trace. auto. split; intuition; inversion H1.
 
-  apply complete_write_item_step in H; [ | auto].
+  rewrite <- beq_nat_refl.
+  apply seq_point_step in H; [ | auto | auto].
+
+
+  apply complete_write_item_step in H. [ | auto].
   apply serial_action_helper in H. simpl in H. rewrite <- H in IHsto_trace. auto. split; intuition; inversion H1.
 
   apply seq_point_step in H; [ | auto | auto].
