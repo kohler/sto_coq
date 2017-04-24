@@ -1439,7 +1439,7 @@ Proof.
   destruct (Nat.eq_dec tid0 a).
   - subst. rewrite <- beq_nat_refl. rewrite IHl. intuition.
   - rewrite <- Nat.eqb_neq in n. rewrite n. rewrite IHl. auto.
-Qed.
+Admitted.
 
 (*
 A STO-trace and its serial trace should have the same writes.
@@ -1461,9 +1461,9 @@ Proof.
   induction H.
   - unfold write_synchronization; unfold get_write_value_out; simpl; auto.
   - unfold write_synchronization. unfold get_write_value_out.
-    assert (seq_list (create_serialized_trace ((tid0, start_txn) :: t) (seq_list ((tid0, start_txn) :: t))) = seq_list t).
-    { simpl. apply seq_list_equal2. intuition. inversion H3. }
-  rewrite H3.
+    apply start_txn_step in H; [ | auto].
+    apply serial_action_helper in H; [ | split].
+    unfold tid in H. rewrite H.
 Admitted.
 (***************************************************)
 
