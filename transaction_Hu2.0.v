@@ -961,6 +961,17 @@ Proof.
   auto. auto.
 Qed.
 
+Lemma seq_point_before_complete (t:trace) (tid: tid):
+  sto_trace ((tid, complete_write_item (S (trace_complete_last t))) :: t) ->
+  In (tid, seq_point) t.
+Proof.
+  intros.
+  inversion H.
+  apply seq_list_seq in H4.
+  apply trace_seqlist_seqpoint_rev in H4.
+  auto. auto.
+Qed.
+
 Lemma seq_list_action tid action t:
   sto_trace ((tid, action) :: t) -> 
   action = seq_point \/ action = commit_txn \/ action = complete_write_item (S (trace_complete_last t))
@@ -1163,27 +1174,30 @@ Proof.
   apply app_assoc.
 Qed.
 
-(*
+
 Lemma serial_action_before_commit tid t1 t2 t:
-  sto_trace t
+  sto_trace ((tid, commit_txn) :: t)
   -> t = t1 ++ (tid, seq_point) :: t2
   -> create_serialized_trace ((tid, commit_txn) :: t) (seq_list ((tid, commit_txn) :: t)) = 
   create_serialized_trace t (seq_list t1) ++ (tid, commit_txn) :: trace_filter_tid tid t ++ create_serialized_trace t (seq_list t2).
 Proof.
   intros.
   assert (~ In tid (seq_list t2)).
-  { rewrite H0 in H. apply sto_trace_app2 in H. apply seq_list_not_seqpoint in H. auto.
   
-(*
-
-
-  rewrite H0 in *. apply seq_list_split_with_seqpoint in H.
-  simpl. rewrite H in *. clear H H0.
-  induction (seq_list t1).
-  simpl in *. rewrite <- beq_nat_refl. auto.*)
 Admitted.
-*)
-(*
+
+
+Lemma serial_action_before_complete tid t1 t2 t:
+  sto_trace ((tid, complete_write_item (S (trace_complete_last t))) :: t)
+  -> t = t1 ++ (tid, seq_point) :: t2
+  -> create_serialized_trace ((tid, complete_write_item (S (trace_complete_last t))) :: t) (seq_list ((tid, complete_write_item (S (trace_complete_last t))) :: t)) = 
+  create_serialized_trace t (seq_list t1) ++ (tid, complete_write_item (S (trace_complete_last t))) :: trace_filter_tid tid t ++ create_serialized_trace t (seq_list t2).
+Proof.
+  intros.
+  assert (~ In tid (seq_list t2)).
+  
+Admitted.
+
 Lemma seq_list_equal trace:
   sto_trace trace -> 
   seq_list (create_serialized_trace trace (seq_list trace)) = seq_list trace.
@@ -1192,16 +1206,15 @@ Proof.
   induction H; simpl.
   auto.
   apply start_txn_step with (tid0 := tid0) in H0. apply serial_action_helper in H0. rewrite <- H0 in IHsto_trace. auto. split; intuition; inversion H1. auto.
-  apply read_item_step with (tid := tid0) (val:= val) (oldver:= oldver) in H0. apply serial_action_helper in H0. rewrite <- H0 in IHsto_trace. auto. split; intuition; inversion H2. auto. auto.
-  apply write_item_step with (tid := tid0) (ver:= ver) (oldval:= oldval) (val := val) in H0. apply serial_action_helper in H0. rewrite <- H0 in IHsto_trace. auto. split; intuition; inversion H1. auto.
-  apply try_commit_txn_step with (tid := tid0) (ver:= ver) (val:= val) in H0. apply serial_action_helper in H0. rewrite <- H0 in IHsto_trace. auto. split; intuition; inversion H1. auto.
-  apply lock_write_item_step with (tid := tid0) in H0. apply serial_action_helper in H0. rewrite <- H0 in IHsto_trace. auto. split; intuition; inversion H2. auto. auto.
-  apply validate_read_item_step with (tid := tid0) in H0. apply serial_action_helper in H0. rewrite <- H0 in IHsto_trace. auto. split; intuition; inversion H1. auto.
+  apply read_item_step with (tid := tid0) (val:= val) (oldver:= oldver) in H0. apply serial_action_helper in H0. rewrite <- H0 in IHsto_trace. auto. split; intuition; inversion H2; inversion H. auto. auto.
+  apply write_item_step with (tid := tid0) (ver:= ver) (oldval:= oldval) (val := val) in H0. apply serial_action_helper in H0. rewrite <- H0 in IHsto_trace. auto. split; intuition; inversion H1; inversion H. auto.
+  apply try_commit_txn_step with (tid := tid0) (ver:= ver) (val:= val) in H0. apply serial_action_helper in H0. rewrite <- H0 in IHsto_trace. auto. split; intuition; inversion H1; inversion H. auto.
+  apply lock_write_item_step with (tid := tid0) in H0. apply serial_action_helper in H0. rewrite <- H0 in IHsto_trace. auto. split; intuition; inversion H3. auto. auto. auto.
+  apply validate_read_item_step with (tid := tid0) in H0. apply serial_action_helper in H0. rewrite <- H0 in IHsto_trace. auto. split; intuition; inversion H2. auto. auto.
   apply abort_txn_step with (tid := tid0) in H0. apply serial_action_helper in H0. rewrite <- H0 in IHsto_trace. auto. split; intuition; inversion H1. auto. 
-  apply complete_write_item_step with (tid := tid0) in H0. apply serial_action_helper in H0. rewrite <- H0 in IHsto_trace. auto. split; intuition; inversion H1. auto.
-  
+
   rewrite <- beq_nat_refl. simpl.
-  apply seq_point_step with (tid:= tid0) (ver := ver) in H1.
+  apply seq_point_step with (tid:= tid0) in H1.
   assert (sto_trace ((tid0, seq_point) :: t)). { auto. }
   apply seq_list_no_two_seqpoint in H1.
   assert (~ In (tid0, seq_point) t -> ~ In tid0 (seq_list t)). { intuition; apply trace_seqlist_seqpoint_rev in H4; apply H3 in H4; auto. }
@@ -1213,21 +1226,38 @@ Proof.
   remember  (seq_list (create_serialized_trace ((tid0, seq_point) :: t) (seq_list t))) as too_long. rewrite <- IHsto_trace. rewrite Heqtoo_long. auto.
   auto. auto. auto. 
   
-  apply commit_txn_step with (tid:= tid0) in H0.
-  assert (sto_trace ((tid0, commit_txn (trace_commit_complete_last t)) :: t)). { auto. }
-  apply seq_point_before_commit in H0.
+  apply complete_write_item_step with (tid := tid0) in H0; [ | auto | auto].
+  assert (sto_trace t). { apply sto_trace_app in H0. auto. }
+  assert (sto_trace ((tid0, complete_write_item (S (trace_complete_last t))) :: t)). { auto. }
+  apply seq_point_before_complete in H0.
   apply in_split in H0. destruct H0. destruct H0.
-  assert (sto_trace t). { apply sto_trace_app in H1. auto. }
   assert (t = x ++ (tid0, seq_point) :: x0). { auto. }
   assert (t = x ++ (tid0, seq_point) :: x0). { auto. }
-  apply serial_action_before_commit in H0. simpl in H0.
+  apply serial_action_before_complete in H0; [ | auto].
+  simpl in H0.
   unfold tid in H0. rewrite H0.
   rewrite seq_list_split_no_seqpoint. simpl.
-  apply serial_action_split in H3. rewrite H3 in IHsto_trace. 
-  rewrite <- IHsto_trace. rewrite H4.
-  rewrite <- seq_list_split_no_seqpoint. auto. auto. auto. auto. 
+  apply serial_action_split in H4; [ | auto].
+  rewrite <- IHsto_trace. rewrite H4. rewrite H5.
+  rewrite <- seq_list_split_no_seqpoint. auto.
+  
+  apply commit_txn_step with (tid := tid0) (ver:= ver) in H0; [ | auto].
+  assert (sto_trace t). { apply sto_trace_app in H0. auto. }
+  assert (sto_trace ((tid0, commit_txn) :: t)). { auto. }
+  apply seq_point_before_commit in H0.
+  apply in_split in H0. destruct H0. destruct H0.
+  assert (t = x ++ (tid0, seq_point) :: x0). { auto. }
+  assert (t = x ++ (tid0, seq_point) :: x0). { auto. }
+  apply serial_action_before_commit in H0; [ | auto].
+  simpl in H0.
+  unfold tid in H0. rewrite H0.
+  rewrite seq_list_split_no_seqpoint. simpl.
+  apply serial_action_split in H4; [ | auto].
+  rewrite <- IHsto_trace. rewrite H4. rewrite H3.
+  rewrite <- seq_list_split_no_seqpoint. auto.
+
 Qed.
-*)
+
 (*
 Lemma serial_action_add tid t:
   sto_trace t
@@ -1379,7 +1409,37 @@ Proof.
 Admitted.
 (***************************************************)
 
+Lemma write_sync_list_unchanged_noseq :
+  forall t tid a, sto_trace ((tid, a)::t) ->
+  a = start_txn ->
+  get_write_value_out t = get_write_value_out ((tid, a)::t).
+Proof.
+  intros.
+  unfold get_write_value_out.
+  subst. simpl.
+  induction (seq_list t).
+  simpl. auto.
+  simpl.
+  destruct (Nat.eq_dec tid0 a).
+  - subst. rewrite <- beq_nat_refl. rewrite IHl. intuition.
+  - rewrite <- Nat.eqb_neq in n. rewrite n. rewrite IHl. auto.
+Qed.
 
+Lemma write_sync_list_unchanged_noseq2 :
+  forall t tid a, sto_trace ((tid, a)::t) ->
+  a <> seq_point ->
+  get_write_value_out t = get_write_value_out ((tid, a)::t).
+Proof.
+  intros.
+  unfold get_write_value_out.
+  subst. destruct a. simpl.
+  induction (seq_list t).
+  simpl. auto.
+  simpl.
+  destruct (Nat.eq_dec tid0 a).
+  - subst. rewrite <- beq_nat_refl. rewrite IHl. intuition.
+  - rewrite <- Nat.eqb_neq in n. rewrite n. rewrite IHl. auto.
+Qed.
 
 (*
 A STO-trace and its serial trace should have the same writes.
@@ -1429,7 +1489,7 @@ The capstone theorem: prove serializability of a sto-trace
 Theorem txn_equal t:
   sto_trace t
   -> exists t', sto_trace t'
-  -> is_serial_trace t'
+  -> check_is_serial_trace t'
   -> Exec_Equivalence t t'.
 Proof.
   exists (create_serialized_trace t (seq_list t)).
