@@ -1167,8 +1167,8 @@ Qed.
 Lemma serial_action_before_commit tid t1 t2 t:
   sto_trace t
   -> t = t1 ++ (tid, seq_point) :: t2
-  -> create_serialized_trace ((tid, commit_txn (trace_commit_complete_last t)) :: t) (seq_list ((tid, commit_txn (trace_commit_complete_last t)) :: t)) = 
-  create_serialized_trace t (seq_list t1) ++ (tid, commit_txn (trace_commit_complete_last t)) :: trace_filter_tid tid t ++ create_serialized_trace t (seq_list t2).
+  -> create_serialized_trace ((tid, commit_txn) :: t) (seq_list ((tid, commit_txn) :: t)) = 
+  create_serialized_trace t (seq_list t1) ++ (tid, commit_txn) :: trace_filter_tid tid t ++ create_serialized_trace t (seq_list t2).
 Proof.
   intros.
   assert (~ In tid (seq_list t2)).
@@ -1250,7 +1250,7 @@ Proof.
   apply IHt0 in H4.
 Admitted.
  *)
-(*
+
 Lemma sto_trace_single tid t:
   sto_trace ((tid, seq_point) :: t)
   -> sto_trace (create_serialized_trace t (seq_list t))
@@ -1261,25 +1261,7 @@ Proof.
   inversion H.
   induction H.
   
-  
-(*  intros.
-  inversion H; subst; simpl; rewrite <- beq_nat_refl in *.
-  inversion H2. 
-  1-8, 10: inversion H1. 
-  inversion H1; subst.
-  simpl.
-  rewrite H2. auto.
-  assert (trace)
-
-  all: destruct (Nat.eq_dec tid0 tid); subst.
-  all: try rewrite <- beq_nat_refl.
-  all: try rewrite <- Nat.eqb_neq in n; try rewrite n; auto.
-  rewrite H. auto.
-  unfold trace_tid_last in H.
-  assert (trace_commit_last t0) = 
-*)
 Admitted.
-*)
 
 Lemma is_sto_trace trace:
   sto_trace trace ->
@@ -1312,14 +1294,6 @@ Proof.
 
   rewrite <- beq_nat_refl.
   apply seq_point_step in H; [ | auto | auto].
-
-
-  apply complete_write_item_step in H. [ | auto].
-  apply serial_action_helper in H. simpl in H. rewrite <- H in IHsto_trace. auto. split; intuition; inversion H1.
-
-  apply seq_point_step in H; [ | auto | auto].
-  
-  rewrite <- beq_nat_refl.
   apply sto_trace_single with (tid0 := tid0) in IHsto_trace.
   unfold trace_filter_tid in IHsto_trace. simpl in IHsto_trace.
   rewrite <- beq_nat_refl in IHsto_trace. unfold trace_filter_tid.
@@ -1330,6 +1304,9 @@ Proof.
   apply H3 in H.
   apply serial_action_remove with (action0 := seq_point) in H; [ | auto].
    rewrite <- H in IHsto_trace. auto. auto.
+
+  apply complete_write_item_step in H; [ | auto | auto].
+  admit.
   
   apply commit_txn_step in H; [ | auto].
   
@@ -1361,11 +1338,11 @@ Proof.
   rewrite app_nil_l in H. auto.
   simpl in H. apply check_app in H. apply IHtr1 in H. auto.
 Qed.
-
+(*
 Eval compute in check_is_serial_trace [(2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (2, read_item 0); (2, start_txn); (3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn)].
 
 Eval compute in check_is_serial_trace [(3, commit_txn 1); (3, seq_point); (3, validate_read_item True); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item False); (1, try_commit_txn); (2, commit_txn 1); (2, seq_point); (2, complete_write_item 1); (2, validate_read_item True); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0);  (2, start_txn); (1, start_txn)].
-
+*)
 Eval compute in check_is_serial_trace example_txn.
 
 (***************************************************)
@@ -1377,15 +1354,27 @@ Proof.
   induction H.
   simpl. auto.
   simpl. apply start_txn_step with (tid0 := tid0) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H1. auto.
-  simpl. apply read_item_step with (tid := tid0) (val:= val) (oldver:= oldver) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H2. auto. auto.
-  simpl. apply write_item_step with (tid := tid0) (oldval:= oldval) (ver:= ver) (val:= val) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H1. auto.
-  simpl. apply try_commit_txn_step with (tid := tid0) (ver:= ver) (val:= val) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H1. auto.
-  simpl. apply lock_write_item_step with (tid := tid0) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H2. auto. auto.
-  simpl. apply validate_read_item_step with (tid := tid0) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H1. auto.
+  simpl. apply read_item_step with (tid := tid0) (val:= val) (oldver:= oldver) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H2; inversion H. auto. auto.
+  simpl. apply write_item_step with (tid := tid0) (oldval:= oldval) (ver:= ver) (val:= val) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H1; inversion H. auto.
+  simpl. apply try_commit_txn_step with (tid := tid0) (ver:= ver) (val:= val) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H1; inversion H. auto.
+  simpl. apply lock_write_item_step with (tid := tid0) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H3; inversion H. auto. auto. auto.
+  simpl. apply validate_read_item_step with (tid := tid0) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H2; inversion H. auto. auto.
   simpl. apply abort_txn_step with (tid := tid0) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H1. auto.
-  simpl. apply complete_write_item_step with (tid := tid0) in H0. rewrite serial_action_helper; auto. split; intuition; inversion H1. auto.
   simpl. rewrite <- beq_nat_refl.
+  apply seq_point_step with (tid := tid0) in H1; [ | auto| auto].
+  assert (sto_trace ((tid0, seq_point) :: t)). { auto. }
+  apply seq_list_no_two_seqpoint in H1. 
+  assert (~ In (tid0, seq_point) t -> ~ In tid0 (seq_list t)).
+  { intuition; apply trace_seqlist_seqpoint_rev in H4; apply H3 in H4; auto. }
+  apply H3 in H1.
+  apply serial_action_remove with (action0 := seq_point) in H1; [ | auto].
+  admit.
+
+  simpl. apply complete_write_item_step with (tid := tid0) in H0; [ | auto | auto].
+  admit.
   
+  simpl. apply commit_txn_step with (tid := tid0) (ver:= ver) in H0; [ | auto].
+  admit.
   
 Admitted.
 (***************************************************)
