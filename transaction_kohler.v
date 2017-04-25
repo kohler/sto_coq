@@ -99,17 +99,6 @@ Fixpoint trace_tid_last_write tid t: option value :=
   | [] => None
   end.
 
-Fixpoint trace_validate_read tid vers aborted (t:trace) :=
-  match t with
-  | (tid', lock_write_item) :: t' =>
-    (tid = tid' \/ aborted) /\ trace_validate_read tid vers False t'
-  | (_, unlock_write_item) :: t' =>
-    trace_validate_read tid vers True t'
-  | (_, complete_write_item vers') :: _ => vers = vers'
-  | _ :: t' => trace_validate_read tid vers aborted t'
-  | [] => vers = 0
-  end.
-
 Fixpoint locked_by (t:trace) default : tid :=
   match t with
   | (tid, lock_write_item) :: _ => tid
@@ -196,6 +185,7 @@ Inductive sto_trace : trace -> Prop :=
 | commit_done_step: forall t tid,
     trace_tid_phase tid t = 4
     -> locked_by t 0 <> tid
+    -> ~ In (tid, commit_done_txn) t
     -> sto_trace t
     -> sto_trace ((tid, commit_done_txn) :: t).
 Hint Constructors sto_trace.
@@ -309,7 +299,7 @@ Proof.
   apply IHt in H; destruct H as [a' H]; exists a'; now right.
 Qed.
 
-Lemma tid_nonzero tid a t:
+Lemma trace_in_nonzero tid a t:
   sto_trace t ->
   In (tid, a) t ->
   tid > 0.
@@ -346,7 +336,7 @@ Lemma track_lock_cons tid tid' t a:
 Proof.
   intros T L.
   assert (tid' > 0) as TG. {
-    apply tid_nonzero with (a:=a) (t:=(tid', a)::t); cbn; auto.
+    apply trace_in_nonzero with (a:=a) (t:=(tid', a)::t); cbn; auto.
   }
   inversion T; subst; cbn; auto.
   right; right; right; eauto.
@@ -390,6 +380,29 @@ Proof.
   now apply sto_trace_cons in H.
 Qed.
 
+Lemma abort_phase_cons tid p t:
+  sto_trace (p :: t) ->
+  trace_tid_phase tid t = 6 ->
+  trace_tid_phase tid (p :: t) = 6.
+Proof.
+  destruct p as [tid' a]; intros T Fo; inversion T; cbn in *.
+  all: destruct (Nat.eq_dec tid tid'); auto.
+  all: subst; omega.
+Qed.
+
+Lemma abort_phase_app tid t1 t2:
+  sto_trace (t1 ++ t2) ->
+  trace_tid_phase tid t2 = 6 ->
+  trace_tid_phase tid (t1 ++ t2) = 6.
+Proof.
+  induction t1; intros.
+  now simpl.
+  rewrite <- app_comm_cons in *.
+  apply abort_phase_cons; auto.
+  apply IHt1; auto.
+  now apply sto_trace_cons in H.
+Qed.
+
 
 Lemma phase_2_preserves_lock tid t1 t2:
   sto_trace (t1 ++ t2) ->
@@ -408,7 +421,7 @@ Proof.
         apply locked_phase.
         now apply sto_trace_app with (t1:=(tid',try_commit_txn)::t1).
         auto.
-        apply tid_nonzero with (a:=try_commit_txn) (t:=(tid', try_commit_txn)::t1 ++ t2).
+        apply trace_in_nonzero with (a:=try_commit_txn) (t:=(tid', try_commit_txn)::t1 ++ t2).
         auto.
         simpl; now left.
       }
@@ -430,14 +443,14 @@ Proof.
     inversion T; cbn in *; auto; omega.
 Qed.
 
-Lemma locked_at_commit tid t1 t2 v:
+Lemma locked_at_seq_point tid t1 t2 v:
   sto_trace ((tid, seq_point) :: t1 ++ (tid, write_item v) :: t2) ->
   locked_by (t1 ++ (tid, write_item v) :: t2) 0 = tid.
 Proof.
   intros T.
   inversion T.
   assert (tid > 0) as TG. {
-    apply tid_nonzero with (a:=write_item v) (t:=t); rewrite H0; auto.
+    apply trace_in_nonzero with (a:=write_item v) (t:=t); rewrite H0; auto.
     apply in_or_app; right; now left.
   }
 
@@ -505,32 +518,69 @@ Proof.
     all: inversion T.
     all: cbn in *.
     all: destruct (Nat.eq_dec tid tid0); try congruence.
-    1-2,5,7,10,13: rewrite <- H3; apply (IHsto_trace _ _ _ H3); auto.
-    1-2: rewrite <- H2; apply (IHsto_trace _ _ _ H2); auto.
-    1: rewrite <- H4; apply (IHsto_trace _ _ _ H4); auto.
+    all: match goal with
+         | [ H: ?t = ?t1 ++ (?tid, commit_txn) :: ?t2 |- _ ] =>
+           rename H into Teq
+         end.
+    all: try solve [ rewrite <- Teq; apply (IHsto_trace _ _ _ Teq); auto ].
+    all: assert (tid > 0)
+      by (apply (trace_in_nonzero _ commit_txn _ H5);
+          rewrite Teq; apply in_or_app; right; now left).
+    all: try omega.
 
-    assert (tid > 0). {
-      apply (trace_phase_nonzero _ _ H5); omega.
-    }
-    omega.
-
-    rewrite <- H3; apply (IHsto_trace _ _ _ H3); auto.
-    rewrite H3; apply commit_phase_app.
-    rewrite <- H3; auto.
+    rewrite <- Teq; apply (IHsto_trace _ _ _ Teq); auto.
+    rewrite Teq; apply commit_phase_app.
+    rewrite <- Teq; auto.
     cbn; destruct (Nat.eq_dec tid tid); congruence.
-
-    assert (tid > 0). {
-      apply (tid_nonzero _ commit_txn _ H5).
-      rewrite H4; apply in_or_app; right; now left.
-    }
-    omega.
-
-    assert (tid > 0). {
-      apply (tid_nonzero _ commit_txn _ H5).
-      rewrite H4; apply in_or_app; right; now left.
-    }
-    omega.
   }
 
   now rewrite H6.
+Qed.
+
+Lemma unlocked_after_commit_done tid t1 t2:
+  sto_trace (t1 ++ (tid, commit_done_txn) :: t2) ->
+  locked_by (t1 ++ (tid, commit_done_txn) :: t2) 0 <> tid.
+Proof.
+  intros T.
+  assert (tid > 0) as G. {
+    apply (trace_in_nonzero tid commit_done_txn _ T).
+    apply in_or_app; right; now left.
+  }
+  induction t1; cbn in *.
+  inversion T; auto.
+  destruct a; destruct a.
+  all: try solve [ apply IHt1; now apply sto_trace_cons in T ].
+  2, 3: omega.
+  assert (trace_tid_phase tid (t1 ++ (tid, commit_done_txn) :: t2) = 4) as P4. {
+    apply commit_phase_app; auto.
+    now apply sto_trace_cons in T.
+    cbn; destruct (Nat.eq_dec tid tid); congruence.
+  }
+  inversion T.
+  destruct (Nat.eq_dec t tid); try congruence.
+Qed.
+
+Lemma no_steps_after_commit_done tid tid' a t1 t2:
+  sto_trace ((tid', a) :: t1 ++ (tid, commit_done_txn) :: t2) ->
+  tid <> tid'.
+Proof.
+  intros T.
+  assert (trace_tid_phase tid (t1 ++ (tid, commit_done_txn) :: t2) = 4) as P4. {
+    apply commit_phase_app.
+    now apply sto_trace_cons in T.
+    cbn; destruct (Nat.eq_dec tid tid); congruence.
+  }
+  remember (t1 ++ (tid, commit_done_txn) :: t2) as t.
+  inversion T; try congruence.
+  all: destruct (Nat.eq_dec tid tid'); auto.
+  all: rewrite <- e in *; clear e.
+  - omega.
+  - assert (locked_by t 0 <> tid). {
+      rewrite Heqt in *; now apply unlocked_after_commit_done.
+    }
+    congruence.
+  - assert (In (tid, commit_done_txn) t). {
+      rewrite Heqt; apply in_or_app; right; now left.
+    }
+    contradiction.
 Qed.
