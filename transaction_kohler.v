@@ -598,11 +598,12 @@ Eval compute in seq_list example_txn.
 
 Eval compute in seq_list example_txn2.
 
+Definition filter_tid tid (t:trace) :=
+  filter (fun x => Nat.eqb tid (fst x)) t.
+
 Fixpoint serialize_by (t:trace) (c:list nat) : trace :=
   match c with
-  | tid :: c' =>
-    filter (fun x => if Nat.eq_dec tid (fst x) then true else false) t
-           ++ serialize_by t c'
+  | tid :: c' => filter_tid tid t ++ serialize_by t c'
   | [] => []
   end.
 
@@ -1338,15 +1339,24 @@ Qed.
 Definition all_committed (t:trace) :=
   forall tid, tid_phase tid t = 4.
 
-Fixpoint tid_outstanding_read tid (t:trace) :=
-  match t with
-  | (tid', validate_read_item _) :: t' =>
-    tid <> tid' /\ tid_outstanding_read tid t'
-  | (tid', read_item _) :: t' =>
-    tid = tid' \/ tid_outstanding_read tid t'
-  | _ :: t' => tid_outstanding_read tid t'
-  | [] => False
-  end.
+Definition tid_outstanding_read tid (t:trace) :=
+  exists v, In (tid, read_item v) t /\
+            ~ In (tid, validate_read_item v) t.
+
+Lemma trace_outstanding_read_head tid v t:
+  sto_trace ((tid, read_item v) :: t) ->
+  tid_outstanding_read tid ((tid, read_item v) :: t).
+Proof.
+  intros T; inversion T.
+  exists (write_version t); split.
+  now left.
+  intros F; subst.
+  assert (3 <= tid_phase tid ((tid, read_item (write_version t)) :: t)). {
+    replace 3 with (action_phase (validate_read_item (write_version t))) by (now cbn).
+    apply phase_increase_in; auto.
+  }
+  cbn in H; destruct (Nat.eq_dec tid tid); [ omega | congruence ].
+Qed.
 
 Inductive trace_unconflicted : trace -> Prop :=
 | nil_unc: trace_unconflicted []
@@ -1364,7 +1374,7 @@ Inductive trace_unconflicted : trace -> Prop :=
     trace_unconflicted ((tid, validate_read_item v) :: t)
 | lock_unc: forall tid t,
     trace_unconflicted t ->
-    (forall tid', tid = tid' \/ ~ tid_outstanding_read tid t) ->
+    (forall tid', tid = tid' \/ ~ tid_outstanding_read tid' t) ->
     trace_unconflicted ((tid, lock_write_item) :: t)
 | complete_unc: forall tid v t,
     trace_unconflicted t ->
@@ -1444,40 +1454,116 @@ Proof.
   - rewrite <- e in *; auto.
 Qed.
 
-Lemma outstanding_read_item tid t:
-  tid_outstanding_read tid t ->
-  exists v, In (tid, read_item v) t.
+Lemma phase_increase_head_middle tid a1 t1 a2 t2:
+  sto_trace ((tid, a1) :: t1 ++ (tid, a2) :: t2) ->
+  action_phase a2 <= action_phase a1.
 Proof.
-  induction t; intros; cbn in *.
-  contradiction.
-  destruct a; destruct a.
-  3: destruct H; [ exists v; rewrite H; now left | ].
-  8: destruct H as [N H].
-  all: try solve [ generalize (IHt H) as X; intros X; destruct X as [vv X]; exists vv; now right ].
+  intros T.
+  replace (action_phase a1) with (tid_phase tid ((tid, a1) :: t1 ++ (tid, a2) :: t2)).
+  apply phase_increase_in; auto.
+  right; apply in_or_app; right; now left.
+  cbn; destruct (Nat.eq_dec tid tid); congruence.
 Qed.
 
-Lemma outstanding_read_no_validate tid t v:
+Lemma write_version_increase_app t1 t2:
+  sto_trace (t1 ++ t2) ->
+  write_version t2 <= write_version (t1 ++ t2).
+Proof.
+  induction t1; intros T.
+  cbn; omega.
+  destruct a; inversion T; rewrite <- H0 in *; clear H0.
+  all: cbn; auto.
+Qed.
+
+Lemma read_version_increase_in tid v t:
   sto_trace t ->
-  tid_outstanding_read tid t ->
-  ~ In (tid, validate_read_item v) t.
+  In (tid, read_item v) t ->
+  v <= write_version t.
 Proof.
-  intros T; induction T; intros; cbn in *.
-  contradiction.
-  all: intros F; destruct F as [F | F]; try congruence.
-  all: repeat match goal with
-              | [ H: _ \/ _ |- _ ] => destruct or H
-              | [ H: _ /\ _ |- _ ] => destruct H
-              | [ H: tid_outstanding_read _ _ |- _ ] => rename H into IR
-              end.
-  all: try solve [ apply (IHT IR F) ].
-  assert (3 <= tid_phase tid0 t). {
-    replace 3 with (action_phase (validate_read_item v)) by (now cbn).
-    apply phase_increase_in; subst; auto.
-  }
-  omega.
-  congruence.
+  intros T; induction T; intros I.
+  destruct I.
+  all: destruct I as [I | I]; try congruence.
+  all: cbn; auto.
+  inversion I; omega.
 Qed.
 
+Lemma trace_after_lock tid t1 t2:
+  sto_trace (t1 ++ (tid, lock_write_item) :: t2) ->
+  In (tid, unlock_write_item) t1
+  \/ locked_by (t1 ++ (tid, lock_write_item) :: t2) 0 = tid
+  \/ write_version t2 < write_version (t1 ++ (tid, lock_write_item) :: t2).
+Proof.
+  induction t1; intros T.
+  right; left; now cbn.
+  destruct a; inversion T; rewrite <- H0 in *; clear H0.
+  all: match goal with
+       | [ H: sto_trace (_ ++ _ :: _) |- _ ] =>
+         rename H into T1; generalize (IHt1 T1); intros X
+       end.
+  all: destruct X as [X | [X | X]]; intuition.
+  - assert (tid > 0). {
+      apply (trace_in_nonzero _ lock_write_item _ T1).
+      apply in_or_app; right; now left.
+    }
+    omega.
+  - rewrite H3 in X; rewrite X; left; now left.
+  - rewrite H3 in X; rewrite X in *; clear X t.
+    cbn; right; right.
+    apply le_lt_n_Sm.
+    apply write_version_increase_app in T1; now cbn in T1.
+  - cbn; right; right; omega.
+  - cbn; right; right; omega.
+  - cbn; right; right; omega.
+Qed.
+  
+Lemma nonaborted_read_validate_different tid tid' t1 t2 v:
+  sto_trace (t1 ++ (tid, lock_write_item) :: t2) ->
+  tid_phase tid (t1 ++ (tid, lock_write_item) :: t2) < 6 ->
+  tid <> tid' ->
+  In (tid', read_item v) t2 ->
+  ~ In (tid', validate_read_item v) t1.
+Proof.
+  induction t1; intros T P N I.
+  intros F; destruct F.
+  rewrite <- app_comm_cons in *.
+  destruct a; inversion T.
+  all: intros F.
+  all: rewrite <- H in *; rewrite <- H0 in *; clear H H0.
+  all: cbn in P; destruct (Nat.eq_dec tid tid0); try congruence.
+  all: match goal with
+       | [ H1: sto_trace ((?t1, _) :: _ ++ (?t2, _) :: _),
+           H2: ?t2 = ?t1 |- _ ] =>
+         let PO := fresh in
+         rewrite <- H2 in *; clear H2;
+           generalize (phase_increase_head_middle _ _ _ _ _ H1); intros PO;
+             cbn in PO; try omega
+       | _ => idtac
+       end.
+  all: destruct F as [F | F]; [ try congruence | ].
+  all: try solve [revert F; apply IHt1; auto; try omega].
+  generalize (trace_after_lock _ _ _ H5); intros X.
+  destruct X as [X | [X | X]].
+  - assert (6 <= tid_phase tid (t1 ++ (tid, lock_write_item) :: t2)). {
+      replace 6 with (action_phase unlock_write_item) by (now cbn).
+      apply phase_increase_in; auto.
+      apply in_or_app; now left.
+    }
+    omega.
+  - apply (locked_by_other tid0) in X; auto.
+    congruence.
+    apply (trace_in_nonzero _ lock_write_item _ H5).
+    apply in_or_app; right; now left.
+  - rewrite H4 in *; clear H4.
+    inversion F; clear F.
+    rewrite H4 in *; clear vers H4.
+    assert (v <= write_version t2). {
+      apply read_version_increase_in with (tid0:=tid').
+      apply sto_trace_app in H5; now apply sto_trace_cons in H5.
+      auto.
+    }
+    omega.
+Qed.
+  
 Lemma commitable_unconflicted t:
   sto_trace t ->
   (exists t2, sto_trace (t2 ++ t) /\ all_committed (t2 ++ t)) ->
@@ -1494,47 +1580,44 @@ Proof.
   all: try solve [apply internal_unc; [| cbn]; auto; myexists].
   - apply read_unc; auto; myexists.
   - apply lock_unc; [ myexists | ].
-    assert (tid_phase tid0 (t2 ++ (tid0, lock_write_item) :: t) = 4) as TP4. {
-      apply NU2.
-    }
-    assert (In (tid0, lock_write_item) (t2 ++ (tid0, lock_write_item) :: t)) as IN. {
-      apply in_or_app; right; now left.
-    }
-    generalize (committed_write_locked_or_completed _ _ NU1 TP4 IN); intros X.
+    remember (t2 ++ (tid0, lock_write_item) :: t) as tb.
     intros tid; destruct (Nat.eq_dec tid0 tid); [ now left | right ].
-    intros F.
-    generalize (outstanding_read_item _ _ F); intros EXR; destruct EXR as [vers EXR].
-    generalize (outstanding_read_no_validate _ _ vers T F); intros ENV.
-    (* destruct X as [X | [vv X]]. *)
-    admit.
+    intros F; destruct F as [vers [ER ENV]].
+    assert (tid_phase tid tb = 4) as TP4X by (apply NU2).
+    assert (In (tid, read_item vers) tb) as ERX. {
+      rewrite Heqtb; apply in_or_app; right; now right.
+    }
+    generalize (committed_read_validated _ _ _ NU1 TP4X ERX); intros EVXB.
+    assert (In (tid, validate_read_item vers) t2) as EVX. {
+      rewrite Heqtb in EVXB; apply in_app_or in EVXB.
+      destruct or EVXB; auto.
+      destruct EVXB; [ congruence | contradiction ].
+    }
+    clear TP4X ENV EVXB.
+    rewrite Heqtb in NU1;
+      apply nonaborted_read_validate_different with (tid':=tid) (v:=vers) in NU1.
+    contradiction.
+    assert (tid_phase tid0 tb = 4) as TP4 by (apply NU2).
+    unfold Top.tid in *; rewrite <- Heqtb; omega.
+    auto.
+    auto.
   - apply validate_read_unc; auto; myexists.
   - apply unlock_unc; auto; myexists.
   - apply complete_unc; auto; myexists.
-Admitted.
+Qed.
 
-
-
-Lemma no_uncommitted_allows_swap_forward_to_seq_point tid1 tid2 a1 a2 t1 t2:
-  no_uncommitted (t1 ++ (tid2, a2) :: (tid1, a1) :: t2) ->
-  sto_trace (t1 ++ (tid2, a2) :: (tid1, a1) :: t2) ->
-  tid1 <> tid2 ->
+Lemma swap_forward_unconflicted tid1 tid2 a1 a2 t:
+  sto_trace ((tid2, a2) :: (tid1, a1) :: t) ->
+  trace_unconflicted ((tid2, a2) :: (tid1, a1) :: t) ->
   action_phase a1 < 3 ->
-  sto_trace (t1 ++ (tid1, a1) :: (tid2, a2) :: t2).
+  tid1 <> tid2 ->
+  sto_trace ((tid1, a1) :: (tid2, a2) :: t).
 Proof.
-  revert tid1 tid2 a1 a2 t2; induction t1;
-    intros tid1 tid2 a1 a2 t2 NU T N AP.
-
-  cbn in *.
-  assert (tid_phase 
-  intros T N AP LB WV.
-  assert (write_version ((tid1, a1) :: t) = write_version t) as WV1. {
-    destruct a1; cbn in AP; try omega.
-    all: cbn; reflexivity.
-  }
-  assert (tid1 > 0) as T1Z. {
+  intros T U AP N.
+  assert (tid1 > 0) as TZ1. {
     apply (trace_in_nonzero _ a1 _ T); right; now left.
   }
-  assert (tid2 > 0) as T2Z. {
+  assert (tid2 > 0) as TZ2. {
     apply (trace_in_nonzero _ a2 _ T); now left.
   }
   assert (tid_phase tid1 ((tid2, a2) :: t) = tid_phase tid1 t) as TP1. {
@@ -1544,473 +1627,412 @@ Proof.
     cbn; destruct (Nat.eq_dec tid2 tid1); congruence.
   }
 
-  inversion T; rewrite <- H0 in *; clear H0.
-  all: match goal with
-       | [ H: sto_trace ((?tid, ?a) :: ?t) |- _ ] => rename H into T1
-       end.
-  all: try rewrite H1 in *; clear H H1.
-  all: try solve [ apply trace_swap_internal_back; [ assumption | now cbn | assumption ] ].
-  - rewrite WV1.
-    apply trace_swap_read_back; auto.
-    rewrite <- WV1; auto.
-    destruct a1; cbn in AP; try omega; cbn; auto.
-    cbn in H3; omega.
-  - cbn in LB; congruence.
-  - apply trace_swap_validate_read_back; auto.
-    destruct a1; cbn in AP; try omega; cbn; auto.
-  - inversion T1; check_action; chomp1.
-    all: cbn; auto.
-    cbn in H3; congruence.
-  - cbn in WV; destruct a1; cbn in AP; try omega.
-Qed.    
+  assert (sto_trace ((tid1, a1) :: t)) as T1
+      by (now apply (sto_trace_cons _ _ T)).
+  destruct a1; cbn in AP; try omega.
+  all: inversion T1.
 
+  1, 3, 4: apply trace_swap_internal_forward; cbn; auto.
 
-Lemma trace_swap_forward_1 t1 t2 tid1 tid2 a1 a2:
-  sto_trace ((tid1, commit_txn) :: t1 ++ (tid2, a2) :: (tid1, a1) :: t2) ->
+  - replace (write_version t) with (write_version ((tid2, a2) :: t)).
+    constructor.
+    now rewrite TP1.
+    destruct a2; cbn; auto.
+    inversion U.
+    simpl in H9; contradiction.
+    generalize (H8 tid1); intros X; destruct X as [X | X].
+    congruence.
+    contradict X.
+    apply trace_outstanding_read_head; auto.
+
+    destruct a2; inversion T.
+    all: try constructor; fix_phase; auto.
+    cbn; constructor; fix_phase; auto.
+    intros vv I.
+    assert (In (tid2, write_item vv) ((tid1, read_item v) :: t)) as II by (now right).
+    apply (H8 vv) in II; destruct II; [ congruence | assumption ].
+    intros vers I.
+    assert (In (tid2, read_item vers) ((tid1, read_item v) :: t)) as II by (now right).
+    apply (H8 vers) in II; destruct II; [ congruence | assumption ].
+    rewrite H7, H1 in *; clear H7 H1.
+    cbn in *.
+    apply complete_write_item_step with (val:=val); fix_phase; auto.
+    destruct (Nat.eq_dec tid2 tid1); [ congruence | assumption ].
+    destruct (Nat.eq_dec tid2 tid1); assumption.
+
+    destruct a2; cbn; auto.
+    inversion T.
+    simpl in H9; omega.
+
+  - apply lock_write_item_step with (v:=v).
+    now rewrite TP1.
+    now right.
+    cbn; destruct a2; auto.
+    inversion T; simpl in H9.
+    omega.
+    destruct a2; inversion T.
+    all: try solve [ cbn in *; contradiction ].
+    all: try constructor; fix_phase; auto.
+    cbn in H9; rewrite H9 in *; omega.
+    intros vv I.
+    assert (In (tid2, write_item vv) ((tid1, lock_write_item) :: t)) as II by (now right).
+    apply (H8 vv) in II; destruct II; [ congruence | assumption ].
+    intros vers I.
+    assert (In (tid2, read_item vers) ((tid1, lock_write_item) :: t)) as II by (now right).
+    apply (H8 vers) in II; destruct II; [ congruence | assumption ].
+    omega.
+Qed.
+
+Fixpoint tid_phase_by_max tid (t:trace) :=
+  match t with
+  | (tid', a) :: t' =>
+    if Nat.eq_dec tid tid'
+    then Nat.max (action_phase a) (tid_phase_by_max tid t')
+    else tid_phase_by_max tid t'
+  | [] => 0
+  end.
+
+Lemma tid_phase_max tid t:
+  sto_trace t ->
+  tid_phase tid t = tid_phase_by_max tid t.
+Proof.
+  induction t; intros T.
+  cbn; auto.
+  destruct a; cbn.
+  rewrite <- (IHt (sto_trace_cons _ _ T)).
+  destruct (Nat.eq_dec tid t0).
+  assert (tid_phase tid t <= action_phase a). {
+    apply phase_increase_head; now rewrite e.
+  }
+  now rewrite Max.max_l.
+  auto.
+Qed.
+  
+Lemma tid_phase_permutation tid t1 t2:
+  Permutation t1 t2 ->
+  sto_trace t1 ->
+  sto_trace t2 ->
+  tid_phase tid t1 = tid_phase tid t2.
+Proof.
+  intros P T1 T2.
+  rewrite (tid_phase_max _ _ T1).
+  rewrite (tid_phase_max _ _ T2).
+  clear T1 T2; induction P; auto.
+  destruct x; cbn; rewrite IHP; auto.
+  destruct x; destruct y; cbn.
+  destruct (Nat.eq_dec tid t0); destruct (Nat.eq_dec tid t); auto.
+  rewrite Nat.max_assoc; rewrite (Nat.max_comm (action_phase a0));
+    rewrite <- Nat.max_assoc; auto.
+  congruence.
+Qed.
+
+Definition serial_permutation t1 t2 :=
+  Permutation t1 t2
+  /\ locked_by t1 0 = locked_by t2 0
+  /\ write_version t1 = write_version t2
+  /\ forall tid, trace_tid_last_write tid t1 = trace_tid_last_write tid t2.
+
+Lemma serial_permutation_cons t1 t2 a:
+  serial_permutation t1 t2 ->
+  serial_permutation (a :: t1) (a :: t2).
+Proof.
+  intros S; destruct S as [P [L [WV LW]]].
+  split; [ | split; [ | split ]].
+  now apply perm_skip.
+  destruct a; destruct a; now cbn.
+  destruct a; destruct a; now cbn.
+  intros tid; destruct a; destruct a; cbn.
+  all: destruct (Nat.eq_dec tid t); auto.
+Qed.
+
+Lemma serial_permutation_app t1 t2 th:
+  serial_permutation t1 t2 ->
+  serial_permutation (th ++ t1) (th ++ t2).
+Proof.
+  induction th; intros S; cbn; auto.
+  apply serial_permutation_cons; auto.
+Qed.
+
+Lemma sto_trace_permutation_cons t1 t2 tid a:
+  sto_trace ((tid, a) :: t1) ->
+  sto_trace t2 ->
+  serial_permutation t1 t2 ->
+  sto_trace ((tid, a) :: t2).
+Proof.
+  intros T1X T2 S.
+  unfold serial_permutation in S.
+  destruct S as [P [L [WV LW]]].
+  assert (sto_trace t1) as T1 by (apply (sto_trace_cons _ _ T1X)).
+  assert (tid_phase tid t1 = tid_phase tid t2) as PE by (now apply tid_phase_permutation).
+  inversion T1X; rewrite <- H0 in *; clear H0.
+
+  - constructor; try rewrite <- PE; auto.
+  - rewrite WV; constructor; try rewrite <- PE; auto.
+    now rewrite <- L.
+  - constructor; try rewrite <- PE; auto.
+  - constructor; try rewrite <- PE; auto.
+  - apply lock_write_item_step with (v:=v); try rewrite <- PE; auto.
+    apply Permutation_in with (l:=t1); auto.
+    now rewrite <- L.
+  - constructor; try rewrite <- PE; auto.
+    intros vv I.
+    apply Permutation_in with (l:=t1); auto.
+    apply (H3 vv).
+    apply Permutation_in with (l:=t2); auto.
+    now apply Permutation_sym.
+  - constructor; try rewrite <- PE; auto.
+    apply locked_by_self_or in H3.
+    destruct or H3.
+    rewrite L in H3; apply locked_by_unlocked; auto.
+    rewrite L in H3; apply locked_by_self; auto.
+    now rewrite <- WV.
+  - constructor; try rewrite <- PE; auto.
+  - constructor; try rewrite <- PE; auto.
+    now rewrite <- L.
+  - constructor; try rewrite <- PE; auto.
+    intros vv I.
+    apply Permutation_in with (l:=t1); auto.
+    apply H3.
+    apply Permutation_in with (l:=t2); auto.
+    now apply Permutation_sym.
+  - rewrite WV.
+    apply complete_write_item_step with (val:=val); try rewrite <- PE; auto.
+    now rewrite <- L.
+    now rewrite <- LW.
+  - constructor; try rewrite <- PE; auto.
+    now rewrite <- L.
+    contradict H4.
+    apply Permutation_in with (l:=t2); auto.
+    now apply Permutation_sym.
+Qed.
+
+Lemma sto_trace_permutation_app t1 t2 th:
+  sto_trace (th ++ t1) ->
+  sto_trace t2 ->
+  serial_permutation t1 t2 ->
+  sto_trace (th ++ t2).
+Proof.
+  induction th; intros T1X T2 S.
+  simpl; auto.
+  rewrite <- app_comm_cons in *.
+  assert (serial_permutation (th ++ t1) (th ++ t2)) by
+      (now apply serial_permutation_app).
+  destruct a.
+  apply sto_trace_permutation_cons with (t1 := th ++ t1); auto.
+  apply IHth; auto.
+  apply (sto_trace_cons _ _ T1X).
+Qed.
+
+Lemma serial_permutation_unconflicted tid1 tid2 a1 a2 t:
+  sto_trace ((tid2, a2) :: (tid1, a1) :: t) ->
+  trace_unconflicted ((tid2, a2) :: (tid1, a1) :: t) ->
   action_phase a1 < 3 ->
   tid1 <> tid2 ->
-  sto_trace ((tid1, commit_txn) :: t1 ++ (tid1, a1) :: (tid2, a2) :: t2).
+  serial_permutation ((tid2, a2) :: (tid1, a1) :: t)
+                     ((tid1, a1) :: (tid2, a2) :: t).
 Proof.
-  revert t2; induction t1; intros t2 T AP N.
-
-  {
-    inversion T.
-    cbn in *.
-    destruct (Nat.eq_dec tid1 tid2); [ congruence | ].
-    destruct (Nat.eq_dec tid1 tid1); [ omega | congruence ].
+  intros T U AP N.
+  assert (tid1 > 0) as TZ1. {
+    apply (trace_in_nonzero _ a1 _ T); right; now left.
   }
-
-  inversion T.
-  constructor.
-  rewrite tid_phase_swap; auto.
-  intros vers I; rewrite in_middle_swap_iff.
-  apply H2; rewrite app_comm_cons; now rewrite in_middle_swap_iff.
-  rewrite <- app_comm_cons.
-  clear tid0 H H0.
-  inversion H3.
-
-  constructor; auto.
-  rewrite tid_phase_swap; auto.
-  apply IHt1.
-  {
-    cbn in *.
-    omega.
+  assert (tid2 > 0) as TZ2. {
+    apply (trace_in_nonzero _ a2 _ T); now left.
   }
-    rename H3 into T1; inversion T1.
-  
-  inversion H3.
-  inversion H9.
-  simpl.
-  clear T H tid0.
-  rewrite <- H0 in H3.
-  rename H3 into T.
-  revert tid1 tid2 N H1 H2 H0.
+  assert (tid_phase tid1 ((tid2, a2) :: t) = tid_phase tid1 t) as TP1. {
+    cbn; destruct (Nat.eq_dec tid1 tid2); congruence.
+  }
+  assert (tid_phase tid2 ((tid1, a1) :: t) = tid_phase tid2 t) as TP2. {
+    cbn; destruct (Nat.eq_dec tid2 tid1); congruence.
+  }
+  split; [ | split; [ | split ]].
+  - constructor.
+  - cbn; destruct a1; destruct a2; try congruence.
+    all: inversion T; cbn in *; try congruence; omega.
+  - cbn; destruct a1; destruct a2; try congruence.
+    all: inversion T; cbn in *; try congruence; omega.
+  - intros tid; cbn.
+    destruct (Nat.eq_dec tid tid1); destruct (Nat.eq_dec tid tid2);
+      congruence.
+Qed.
 
-
-Lemma trace_swap_forward t1 t2 tid1 tid2 a1 a2:
+Lemma swap_forward_all_committed tid1 tid2 a1 a2 t1 t2:
   sto_trace (t1 ++ (tid2, a2) :: (tid1, a1) :: t2) ->
-  tid_phase tid1 (t1 ++ (tid2, a2) :: (tid1, a1) :: t2) = 4 ->
+  all_committed (t1 ++ (tid2, a2) :: (tid1, a1) :: t2) ->
   action_phase a1 < 3 ->
   tid1 <> tid2 ->
   sto_trace (t1 ++ (tid1, a1) :: (tid2, a2) :: t2).
 Proof.
-  unfold Top.tid in *.
-  intros T P AP NE; remember (t1 ++ (tid2, a2) :: (tid1, a1) :: t2) as t.
-  revert t1 t2 tid1 tid2 a1 a2 Heqt P AP NE.
-  induction T; intros t1 t2 tid1 tid2 a1 a2 ET P AP NE.
-  destruct t1; cbn in *; discriminate.
-
-  {
-    destruct t1; cbn in *; inversion ET; subst.
-    destruct (Nat.eq_dec tid1 tid2); [ congruence | ].
-    rewrite tid_phase_head in P; omega.
-    destruct (Nat.eq_dec tid1 tid0); [ omega | ].
-
-    constructor; auto.
-    rewrite tid_phase_swap; auto.
+  intros T1 A AP N.
+  generalize (sto_trace_app _ _ T1); intros TB.
+  assert (trace_unconflicted ((tid2, a2) :: (tid1, a1) :: t2)). {
+    apply commitable_unconflicted; auto.
+    now exists t1.
   }
+  apply sto_trace_permutation_app with (t1:=(tid2,a2)::(tid1,a1)::t2).
+  auto.
+  apply swap_forward_unconflicted; auto.
+  apply serial_permutation_unconflicted; auto.
+Qed.
 
-  {
-    destruct t1; cbn in *; inversion ET; subst.
-    destruct (Nat.eq_dec tid1 tid2); [ congruence | ].
-    rewrite tid_phase_head in P; omega.
-    destruct (Nat.eq_dec tid1 tid0); [ omega | ].
+Function swap_forward_once (t:trace) { measure length t } :=
+  match t with
+  | (tid2, a2) :: (tid1, a1) :: t' =>
+    if Nat.eq_dec tid2 tid1
+    then (tid2, a2) :: swap_forward_once ((tid1, a1) :: t')
+    else if action_phase a1 <? 3
+         then (tid1, a1) :: (tid2, a2) :: t'
+         else (tid2, a2) :: swap_forward_once ((tid1, a1) :: t')
+  | _ => t
+  end.
+Proof.
+  all: intros; cbn; apply lt_n_S; omega.
+Defined.
 
-    rewrite write_version_swap; auto.
-    constructor; auto.
-    rewrite tid_phase_swap; auto.
-    rewrite locked_by_swap_head; auto.
+Lemma swap_forward_once_result t:
+  swap_forward_once t = t
+  \/ (exists t1 t2 tid1 tid2 a1 a2,
+         t = t1 ++ (tid2, a2) :: (tid1, a1) :: t2
+         /\ tid1 <> tid2
+         /\ action_phase a1 < 3
+         /\ swap_forward_once t = t1 ++ (tid1, a1) :: (tid2, a2) :: t2).
+Proof.
+  functional induction (swap_forward_once t); cbn; auto.
+  - destruct IHt0.
+    left; now rewrite H.
+    destruct H as [t1 [t2 [tid1 [tid3 [a4 [a3 H]]]]]].
+    right.
+    exists ((tid2, a2) :: t1), t2, tid1, tid3, a4, a3.
+    intuition.
+    now rewrite H0.
+    now rewrite H3.
+  - right.
+    exists [], t', tid1, tid2, a1, a2.
+    intuition.
+    now rewrite <- Nat.ltb_lt.
+  - destruct IHt0.
+    left; now rewrite H.
+    destruct H as [t1 [t2 [tid0 [tid3 [a4 [a3 H]]]]]].
+    right.
+    exists ((tid2, a2) :: t1), t2, tid0, tid3, a4, a3.
+    intuition.
+    now rewrite H0.
+    now rewrite H3.
+Qed.
+  
+Lemma swap_forward_once_correct t:
+  sto_trace t ->
+  all_committed t ->
+  sto_trace (swap_forward_once t).
+Proof.
+  intros T A.
+  destruct (swap_forward_once_result t).
+  now rewrite H.
+  destruct H as [t1 [t2 [tid1 [tid2 [a1 [a2 [H [N [AP S]]]]]]]]].
+  rewrite S.
+  rewrite H in *.
+  apply swap_forward_all_committed; auto.
+Qed.
 
-    assert (sto_trace ((tid2, a2) :: (tid1, a1) :: t2)) as TH. {
-      now apply sto_trace_app with (t1:=t1).
-    }
-    assert (tid1 > 0) as T1N. {
-      apply (trace_in_nonzero _ a1 _ TH).
-      right; now left.
-    }
-    destruct a1; destruct a2; try reflexivity.
-    all: try solve [simpl in AP; omega].
-    all: inversion TH.
-    simpl in H5; omega.
-    simpl in H4; omega.
-    simpl in H5; omega.
+Inductive serial_trace : trace -> Prop :=
+| serial_empty : serial_trace []
+| serial_singleton : forall tid a,
+    serial_trace [(tid, a)]
+| serial_same: forall tid a1 a2 t,
+    serial_trace ((tid, a2) :: t) ->
+    serial_trace ((tid, a1) :: (tid, a2) :: t)
+| serial_change: forall tid1 tid2 a1 a2 t,
+    serial_trace ((tid2, a2) :: t) ->
+    tid_phase tid1 ((tid2, a2) :: t) = 0 ->
+    serial_trace ((tid1, a1) :: (tid2, a2) :: t).
+
+Lemma swap_forward_once_fixpoint_contents t:
+  swap_forward_once t = t ->
+  forall t1 tid1 tid2 a1 a2 t2,
+    t = t1 ++ (tid2, a2) :: (tid1, a1) :: t2 ->
+    tid1 = tid2 \/ 3 <= action_phase a1.
+Proof.
+  functional induction (swap_forward_once t).
+  all: intros S.
+  - inversion S; rewrite H0; intros.
+    destruct t1; cbn in *; inversion H.
+    now left.
+    apply (IHt0 H0 t1 tid1 tid0 a0 a3 t2); auto.
+  - inversion S; subst.
+    destruct (Nat.eq_dec tid2 tid2); congruence.
+  - inversion S; rewrite H0; intros.
+    destruct t1; cbn in *; inversion H.
+    right.
+    rewrite leb_iff_conv in e1; rewrite <- H5; omega.
+    apply (IHt0 H0 t1 tid0 tid3 a0 a3 t2); auto.
+  - intros.
+    destruct t.
+    destruct t1; discriminate.
+    destruct t.
+    destruct t1; inversion H; destruct t1; discriminate.
+    destruct p; destruct p0; contradiction.
+Qed.
+
+(* the following is not true *)
+Lemma swap_forward_once_fixpoint_serial t:
+  sto_trace t ->
+  (exists t2, all_committed (t2 ++ t)) ->
+  swap_forward_once t = t ->
+  serial_trace t.
+Proof.
+  induction t; intros T E S.
+  constructor.
+  assert (serial_trace t). {
+    apply IHt.
+    apply (sto_trace_cons _ _ T).
+    destruct E as [t2 E].
+    exists (t2 ++ [a]); rewrite <- app_assoc; simpl; auto.
+    destruct a; destruct t; rewrite swap_forward_once_equation in S.
+    cbn; auto.
+    destruct p.
+    destruct (Nat.eq_dec t0 t1).
+    inversion S; rewrite H0; auto.
+    remember (action_phase a0 <? 3) as A; destruct A.
+    inversion S; subst; contradiction.
+    inversion S; rewrite H0; auto.
   }
-
-  {
-    destruct t1; cbn in *; inversion ET; subst.
-    destruct (Nat.eq_dec tid1 tid2); [ congruence | ].
-    rewrite tid_phase_head in P; omega.
-    destruct (Nat.eq_dec tid1 tid0); [ omega | ].
-
-    constructor; auto.
-    rewrite tid_phase_swap; auto.
+  generalize (swap_forward_once_fixpoint_contents _ S); intros X.
+  destruct t.
+  destruct a; apply serial_singleton.
+  destruct a; destruct p.
+  generalize (X [] t1 t0 a0 a t).
+  intros Y; cbn in Y.
+  assert (t1 = t0 \/ 3 <= action_phase a0). {
+    apply Y; auto.
   }
-
-  {
-    destruct t1; cbn in *; inversion ET; subst.
-    destruct (Nat.eq_dec tid1 tid2); [ congruence | ].
-    rewrite tid_phase_head in P; omega.
-    destruct (Nat.eq_dec tid1 tid0); [ omega | ].
-
-    constructor; auto.
-    rewrite tid_phase_swap; auto.
-  }
-
-  {
-    destruct t1; cbn in *; inversion ET; subst.
-    destruct (Nat.eq_dec tid1 tid2); [ congruence | ].
-    rewrite tid_phase_head in P; omega.
-    destruct (Nat.eq_dec tid1 tid0); [ omega | ].
-
-    apply lock_write_item_step with (v:=v); auto.
-    rewrite tid_phase_swap; auto.
-    apply Permutation_in with (l:=t1 ++ (tid2, a2) :: (tid1, a1) :: t2); auto.
-    apply Permutation_app_head; constructor.
-    rewrite locked_by_swap_head; auto.
-
-    assert (sto_trace ((tid2, a2) :: (tid1, a1) :: t2)) as TH. {
-      now apply sto_trace_app with (t1:=t1).
-    }
-    assert (tid1 > 0) as T1N. {
-      apply (trace_in_nonzero _ a1 _ TH).
-      right; now left.
-    }
-    destruct a1; destruct a2; try reflexivity.
-    all: try solve [simpl in AP; omega].
-    all: inversion TH.
-    simpl in H6; omega.
-    simpl in H5; omega.
-    simpl in H6; omega.
-  }
-
-  {
-    destruct t1; cbn in *; inversion ET; subst.
-    destruct (Nat.eq_dec tid1 tid2); [ congruence | ].
-    rewrite tid_phase_head in P; omega.
-    destruct (Nat.eq_dec tid1 tid0); [ omega | ].
-
-    constructor; auto.
-    rewrite tid_phase_swap; auto.
-    intros v I.
-    apply Permutation_in with (l:=t1 ++ (tid2, a2) :: (tid1, a1) :: t2).
-    apply Permutation_app_head; constructor.
-    apply (H0 v).
-    apply Permutation_in with (l:=t1 ++ (tid1, a1) :: (tid2, a2) :: t2).
-    apply Permutation_app_head; constructor.
-    auto.
-  }
-
-  {
-    destruct t1; cbn in *; inversion ET; subst.
-    destruct (Nat.eq_dec tid1 tid2); [ congruence | ].
-    rewrite tid_phase_head in P; omega.
-    destruct (Nat.eq_dec tid1 tid0); [ omega | ].
-
-    constructor; auto.
-    rewrite tid_phase_swap; auto.
-    rewrite locked_by_swap_head; auto.
-
-    {
-      assert (sto_trace ((tid2, a2) :: (tid1, a1) :: t2)) as TH. {
-        now apply sto_trace_app with (t1:=t1).
-      }
-      assert (tid1 > 0) as T1N. {
-        apply (trace_in_nonzero _ a1 _ TH).
-        right; now left.
-      }
-      destruct a1; destruct a2; try reflexivity.
-      all: try solve [simpl in AP; omega].
-      all: inversion TH.
-      simpl in H5; omega.
-      simpl in H4; omega.
-      simpl in H5; omega.
-    }
-
-    rewrite <- write_version_swap; auto.
-  }
-
-  {
-    destruct t1; cbn in *; inversion ET; subst.
-    destruct (Nat.eq_dec tid1 tid2); [ congruence | ].
-    rewrite tid_phase_head in P; omega.
-    destruct (Nat.eq_dec tid1 tid0); [ omega | ].
-
-    constructor; auto.
-    rewrite tid_phase_swap; auto.
-    rewrite tid_phase_swap; auto.
-  }
-
-  {
-    destruct t1; cbn in *; inversion ET.
-    rewrite <- H2 in *; rewrite H4 in *; rewrite <- H3 in *; clear H2 H3 H4.
-    destruct (Nat.eq_dec tid1 tid0); [ congruence | ].
-    rewrite tid_phase_head in P; omega.
-    destruct (Nat.eq_dec tid1 tid0); [ omega | ].
-
-    rewrite H3 in *; clear H3.
-    constructor; auto.
-    rewrite tid_phase_swap; auto.
-    rewrite locked_by_swap_head; auto.
-
-    {
-      assert (sto_trace ((tid2, a2) :: (tid1, a1) :: t2)) as TH. {
-        now apply sto_trace_app with (t1:=t1).
-      }
-      assert (tid1 > 0) as T1N. {
-        apply (trace_in_nonzero _ a1 _ TH).
-        right; now left.
-      }
-      destruct a1; destruct a2; try reflexivity.
-      all: try solve [simpl in AP; omega].
-      all: inversion TH.
-      simpl in H6; omega.
-      simpl in H5; omega.
-      simpl in H6; omega.
-    }
-  }
-
-  {
-    destruct t1; cbn in *; inversion ET.
-    {
-      subst.
-      rewrite tid_phase_head in P.
-      destruct (Nat.eq_dec tid1 tid2); [ | omega ].
-      subst; clear P; congruence.
-    }
-    rewrite <- H2 in *; clear p H2.
-    rewrite H3 in *; clear t H3 ET.
-
-    constructor; auto.
-    rewrite tid_phase_swap; auto.
-    {
-      intros vers I.
-      apply Permutation_in with (l:=t1 ++ (tid2, a2) :: (tid1, a1) :: t2).
-      apply Permutation_app_head; constructor.
-      apply (H0 vers).
-      apply Permutation_in with (l:=t1 ++ (tid1, a1) :: (tid2, a2) :: t2).
-      apply Permutation_app_head; constructor.
-      auto.
-    }
-    destruct (Nat.eq_dec tid1 tid0); auto.
-    rewrite <- e in *; clear e tid0 P.
+  destruct H0.
+  rewrite <- H0; now constructor.
+  apply serial_change; auto.
+  assert (forall a, ~ In (t0, a) t). {
+    intros aa I.
     admit.
   }
-
-  {
-    destruct t1; cbn in *; inversion ET.
-    {
-      rewrite H3 in *; rewrite H5 in *; clear t tid0 H3 H5.
-      rewrite tid_phase_head in P.
-      destruct (Nat.eq_dec tid1 tid2); [ congruence | omega ].
-    }
-    rewrite <- H3 in *; rewrite H4 in *; clear p t H3 H4 ET.
-    destruct (Nat.eq_dec tid1 tid0); auto.
-    Focus 2.
-    rewrite write_version_swap; [ | omega].
-    apply complete_write_item_step with (val:=val).
-    rewrite tid_phase_swap; auto.
-    constructor.
-    eeFocus 2. auto.
-    apply IHT; auto.
-    rewrite tid_phase_swap; auto.
-    
-    rewrite locked_by_swap_head; auto.
-
-    {
-      assert (sto_trace ((tid2, a2) :: (tid1, a1) :: t2)) as TH. {
-        now apply sto_trace_app with (t1:=t1).
-      }
-      assert (tid1 > 0) as T1N. {
-        apply (trace_in_nonzero _ a1 _ TH).
-        right; now left.
-      }
-      destruct a1; destruct a2; try reflexivity.
-      all: try solve [simpl in AP; omega].
-      all: inversion TH.
-      simpl in H6; omega.
-      simpl in H5; omega.
-      simpl in H6; omega.
-    }
-    
-
-Lemma count_occ_app {A:Type} eq_dec (l1 l2:list A) x:
-  count_occ eq_dec (l1 ++ l2) x =
-  count_occ eq_dec l1 x + count_occ eq_dec l2 x.
-Proof.
-  induction l1; cbn; auto.
-  destruct (eq_dec a x); auto.
-  rewrite IHl1; omega.
-Qed.
-
-Lemma in_seq_list_subset tid t c1 c2:
-  In tid (seq_list' t c2) ->
-  (forall x, In x c2 -> In x c1) ->
-  In tid (seq_list' t c1).
-Proof.
-  revert c1 c2; induction t; intros; cbn; auto.
-  destruct a; destruct a; try solve [now apply (IHt c1 c2)].
-  cbn in H.
-  remember (count_occ Nat.eq_dec c2 t0) as c2ct; destruct c2ct.
-  destruct (count_occ Nat.eq_dec c1 t0).
-  now apply (IHt c1 c2).
-  right; now apply (IHt c1 c2).
-  assert (In t0 c1). {
-    apply H0.
-    rewrite (count_occ_In Nat.eq_dec); omega.
-  }
-  rewrite (count_occ_In Nat.eq_dec) in H1.
-  destruct (count_occ Nat.eq_dec c1 t0); try omega.
-  destruct H; [ left; auto | right; now apply (IHt c1 c2) ].
-  cbn in H.
-  assert (forall x, In x (t0 :: c2) -> In x (t0 :: c1)). {
-    intros x I; destruct I; [ left | right ]; auto.
-  }
-  now apply (IHt (t0::c1) (t0::c2)).
-Qed.
-
-Lemma count_occ_Permutation {A:Type} eq_dec (l1 l2:list A) a:
-  Permutation l1 l2 ->
-  count_occ eq_dec l1 a = count_occ eq_dec l2 a.
-Proof.
-  intros P; induction P; auto; cbn.
-  - destruct (eq_dec x a); now rewrite IHP.
-  - destruct (eq_dec x a); destruct (eq_dec y a); auto.
-  - rewrite IHP1; now rewrite IHP2.
-Qed.
-
-Lemma in_seq_list_Permutation tid t c1 c2:
-  Permutation c1 c2 ->
-  In tid (seq_list' t c1) ->
-  In tid (seq_list' t c2).
-Proof.
-  intros P I.
-  apply in_seq_list_subset with (c2:=c1); auto.
-  intros x E; apply Permutation_in with (l:=c1); auto.
-Qed.
-
-Lemma in_seq_list_or tid t x c:
-  In tid (seq_list' t (x :: c)) ->
-  tid = x \/ In tid (seq_list' t c).
-Proof.
-  revert x c; induction t; intros; cbn; auto.
-  destruct a; destruct a; try solve [now apply (IHt x c)].
-  - cbn in H.
-    destruct (Nat.eq_dec x t0).
-    + destruct H; [ subst; now left | ].
-      apply IHt in H; destruct or H; [ now left | right ].
-      destruct (count_occ Nat.eq_dec c t0); auto.
-      now right.
-    + destruct (count_occ Nat.eq_dec c t0).
-      apply IHt in H; destruct or H; auto.
-      destruct H; [ right; subst; now left | ].
-      apply IHt in H; destruct or H; [ now left | right ].
-      now right.
-  - cbn in H.
-    assert (Permutation (t0::x::c) (x::t0::c)) by (apply perm_swap).
-    apply (in_seq_list_Permutation _ _ _ _ H0) in H; clear H0.
-    apply (IHt _ _ H).
-Qed.  
-
-Lemma commit_seq_point_in_seq_list tid (t1 t2 t3:trace):
-  In tid (seq_list (t1 ++ (tid, commit_txn) :: t2 ++ (tid, seq_point) :: t3)).
-Proof.
-  induction t1.
-  cbn.
-  induction t2.
-  cbn; destruct (Nat.eq_dec tid tid).
-  cbn; now left.
-  congruence.
-  destruct a; destruct a; cbn; auto.
-  destruct (Nat.eq_dec tid t).
-  rewrite e; now left.
-  auto.
-  apply in_seq_list_subset with (c2:=[tid]); auto.
-  intros x I; destruct I; right; now left.
-
-  destruct a; destruct a; simpl; cbn; auto.
-  apply in_seq_list_subset with (c2:=[]); auto.
-  intros x I; destruct I.
-Qed.
-
-Lemma in_seq_list_iff tid t:
-  sto_trace t ->
-  tid_phase tid t = 4 <-> In tid (seq_list t).
-Proof.
-  intros T; split.
-
-  intros P.
-  apply commit_in_phase4 in P.
-  apply in_split in P.
-  destruct P as [t1 [t2 TE]].
-  assert (In (tid, seq_point) t2). {
-    apply seq_point_in_commit_in with (t1:=t1).
-    now rewrite TE in T.
-  }
-  apply in_split in H.
-  destruct H as [t2' [t3 TE']].
-  rewrite TE; rewrite TE'.
-  apply commit_seq_point_in_seq_list.
-  auto.
-
-  induction T; intros I; cbn in *; try contradiction.
-  all: try apply IHT in I.
-  all: destruct (Nat.eq_dec tid tid0); auto.
-  all: try solve [rewrite <- e in *; rewrite I in *; omega].
-  apply IHT.
-  apply in_seq_list_or in I.
-  destruct I; auto; congruence.
-Qed.
-
-Lemma serialize_not_in_head tid a t c:
-  ~ In tid c ->
-  serialize_by ((tid, a) :: t) c = serialize_by t c.
-Proof.
-  induction c; intros NI; cbn; auto.
-  destruct (Nat.eq_dec a0 tid).
-  rewrite e in NI; destruct NI; now left.
-  assert (~ In tid c) as NIX. {
-    contradict NI; now right.
-  }
-  now rewrite (IHc NIX).
-Qed.
-
-Lemma serialize_trace t:
-  sto_trace t ->
-  sto_trace (serialize t).
-Proof.
-  intros T; induction T; cbn in *; auto.
-  1-9: match goal with
-       | [ |- context [ (?tid, ?a) :: ?t ] ] =>
-         assert (tid_phase tid ((tid, a) :: t) <> 4) as NP by
-             (cbn; destruct (Nat.eq_dec tid tid); omega)
-       end.
-  1-9: rewrite in_seq_list_iff in NP; cbn in NP; auto.
-  6: now apply lock_write_item_step with (v:=v).
-  1-9: now rewrite (serialize_not_in_head _ _ _ _ NP).
-  Focus 2.
   
-  
-
-  assert (tid_phase tid0 t
-  - cbn in *; auto.
-  - 
+  contradict X.
+    apply eq_refl in Y.
+  functional induction (swap_forward_once t).
+  all: intros T E S.
+  - apply serial_same.
+    apply IHt0.
+    apply (sto_trace_cons _ _ T).
+    destruct E as [t2 E].
+    exists (t2 ++ [(tid2, a2)]); rewrite <- app_assoc; now cbn.
+    inversion S; now rewrite H0.
+  - inversion S; subst.
+    destruct (Nat.eq_dec tid2 tid2); congruence.
+  - apply serial_change.
+    apply IHt0.
+    apply (sto_trace_cons _ _ T).
+    destruct E as [t2 E].
+    exists (t2 ++ [(tid2, a2)]); rewrite <- app_assoc; now cbn.
+    inversion S; now rewrite H0.
+    
+    admit.
+  - destruct t; try constructor.
+    destruct p; destruct t; try constructor.
+    destruct p; contradiction.
+Admitted.
