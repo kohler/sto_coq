@@ -85,10 +85,10 @@ Proof.
 Qed.
 
 (* Return the version number of the last committed write *)
-Fixpoint trace_write_version (t:trace): version :=
+Fixpoint write_version (t:trace): version :=
   match t with
   | (_, complete_write_item v) :: _ => v
-  | _ :: t' => trace_write_version t'
+  | _ :: t' => write_version t'
   | [] => 0
   end.
 
@@ -128,7 +128,7 @@ Inductive sto_trace : trace -> Prop :=
     tid_phase tid t = 1
     -> locked_by t 0 = 0
     -> sto_trace t
-    -> sto_trace ((tid, read_item (trace_write_version t)) :: t)
+    -> sto_trace ((tid, read_item (write_version t)) :: t)
 
 | write_item_step: forall t tid val,
     tid_phase tid t = 1
@@ -158,7 +158,7 @@ Inductive sto_trace : trace -> Prop :=
 | validate_read_item_step: forall t tid vers,
     tid_phase tid t = 3
     -> locked_by t tid = tid (* unlocked or locked by me *)
-    -> trace_write_version t = vers
+    -> write_version t = vers
     -> sto_trace t
     -> sto_trace ((tid, validate_read_item vers) :: t)
 
@@ -186,7 +186,7 @@ Inductive sto_trace : trace -> Prop :=
     -> locked_by t 0 = tid
     -> trace_tid_last_write tid t = Some val
     -> sto_trace t
-    -> sto_trace ((tid, complete_write_item (S (trace_write_version t))) :: t)
+    -> sto_trace ((tid, complete_write_item (S (write_version t))) :: t)
 
 | commit_done_step: forall t tid,
     tid_phase tid t = 4
@@ -486,7 +486,7 @@ Qed.
 
 Lemma seq_point_after t1 t2 tid action:
   sto_trace ((tid, action) :: t1 ++ (tid, commit_txn) :: t2)
-  -> action = complete_write_item (S (trace_write_version t2))
+  -> action = complete_write_item (S (write_version t2))
      \/ action = commit_done_txn.
 Proof.
   intros T.
@@ -499,8 +499,8 @@ Proof.
   2: now right.
   left.
 
-  assert (trace_write_version (t1 ++ (tid, commit_txn) :: t2) =
-          trace_write_version t2). {
+  assert (write_version (t1 ++ (tid, commit_txn) :: t2) =
+          write_version t2). {
     subst.
     clear TG4 val H2 H3 H4 H5.
     inversion T; subst; clear T H4 val.
@@ -699,7 +699,7 @@ Qed.
 Lemma remove_tid_write_version tid t:
   sto_trace t ->
   tid_phase tid t <> 4 ->
-  trace_write_version (remove_tid tid t) = trace_write_version t.
+  write_version (remove_tid tid t) = write_version t.
 Proof.
   intros T; induction T; intros P; cbn in *; auto.
   all: destruct (Nat.eq_dec tid tid0); [ rewrite e in * | ].
@@ -756,6 +756,16 @@ Lemma locked_by_self tid t:
   locked_by t tid = tid.
 Proof.
   intros T; induction T; cbn in *; intros L; auto.
+Qed.
+
+Lemma locked_by_self_or tid t:
+  locked_by t tid = tid ->
+  locked_by t 0 = 0 \/ locked_by t 0 = tid.
+Proof.
+  induction t; cbn in *; intros.
+  now left.
+  destruct a; destruct a; try solve [ now apply IHt ].
+  all: intuition.
 Qed.
 
 Lemma locked_by_other tid tid' t:
@@ -910,8 +920,8 @@ Qed.
 
 Lemma write_version_swap t1 t2 tid1 tid2 a1 a2:
   action_phase a1 < 4 ->
-  trace_write_version (t1 ++ (tid2, a2) :: (tid1, a1) :: t2) =
-  trace_write_version (t1 ++ (tid1, a1) :: (tid2, a2) :: t2).
+  write_version (t1 ++ (tid2, a2) :: (tid1, a1) :: t2) =
+  write_version (t1 ++ (tid1, a1) :: (tid2, a2) :: t2).
 Proof.
   induction t1; intros AP; cbn in *.
 
@@ -942,6 +952,618 @@ Proof.
   all: apply Permutation_app_head.
   all: now apply perm_swap.
 Qed.
+
+Definition action_internal a :=
+  match a with
+  | read_item _
+  | validate_read_item _
+  | lock_write_item
+  | complete_write_item _
+  | unlock_write_item => False
+  | _ => True
+  end.
+
+Definition action_commute_read a :=
+  match a with
+  | lock_write_item
+  | complete_write_item _
+  | unlock_write_item => False
+  | _ => True
+  end.
+
+Local Ltac check_action :=
+  match goal with
+  | [ H: action_internal ?a, H2: ?b = ?a |- _ ] =>
+    rewrite <- H2 in *; clear H2; cbn in H; try contradiction; clear H
+  | [ H: action_commute_read ?a, H2: ?b = ?a |- _ ] =>
+    rewrite <- H2 in *; clear H2; cbn in H; try contradiction; clear H
+  | [ H: action_phase ?a < _, H2: ?b = ?a |- _ ] =>
+    rewrite <- H2 in *; clear H2; cbn in H; try omega
+  end.
+Local Ltac fix_phase :=
+  match goal with
+  | [ TP: tid_phase ?tid ?x = tid_phase ?tid _
+      |- context [ tid_phase ?tid ?x ] ] => now rewrite TP
+  | [ TP: tid_phase ?tid _ = tid_phase ?tid ?x
+      |- context [ tid_phase ?tid ?x ] ] => now rewrite <- TP
+  | [ L: locked_by ?t ?a = ?x
+      |- locked_by (_ :: ?t) ?a = ?x ] => cbn; apply L
+  | [ L: locked_by ?t ?a <> ?x
+      |- locked_by (_ :: ?t) ?a <> ?x ] => cbn; apply L
+  | [ L: locked_by (_ :: ?t) ?a = ?x
+      |- locked_by ?t ?a = ?x ] => cbn in L; apply L
+  | [ WV: write_version ?t = ?x
+      |- write_version (_ :: ?t) = ?x ] => cbn; apply WV
+  | [ LW: trace_tid_last_write ?tid ?t = ?x
+      |- trace_tid_last_write ?tid ((?tid2, ?a) :: ?t) = ?x ] =>
+    cbn; destruct (Nat.eq_dec tid tid2); [ congruence | apply LW ]
+  | [ LW: trace_tid_last_write ?tid ((?tid2, ?a) :: ?t) = ?x
+      |- trace_tid_last_write ?tid ?t = ?x ] =>
+    cbn in LW; destruct (Nat.eq_dec tid tid2); [ congruence | apply LW ]
+  | [ H: In ?p ?t
+      |- In ?p (_ :: ?t) ] => right; apply H
+  | [ H: In ?p (_ :: ?t)
+      |- In ?p ?t ] => destruct H; [ congruence | apply H ]
+  | [ |- context [ In (?tid, _) _ ] ] =>
+    let vx := fresh in
+    let I := fresh in
+    intros vx I; destruct I; [ congruence | right; revert vx I; assumption ]
+  | [ H: ~ In ?p ?t
+      |- ~ In ?p (?x :: ?t) ] => contradict H; destruct H; [ congruence | assumption ]
+  | [ H: ~ In ?p (?x :: ?t)
+      |- ~ In ?p ?t ] => contradict H; right; assumption
+  | [ |- sto_trace ((?tid, start_txn) :: ?t) ] =>
+    constructor; [ assumption | fix_phase | auto ]
+  | [ |- sto_trace ((?tid, read_item _) :: ?t) ] =>
+    constructor; [ fix_phase .. | assumption ]
+  | [ |- sto_trace ((?tid, write_item _) :: ?t) ] =>
+    constructor; [ fix_phase | assumption ]
+  | [ |- sto_trace ((?tid, try_commit_txn) :: ?t) ] =>
+    constructor; [ fix_phase | assumption ]
+  | [ H: In (?tid, write_item ?vv) _
+      |- sto_trace ((?tid, lock_write_item) :: ?t) ] =>
+    apply lock_write_item_step with (v:=vv); [ fix_phase .. | assumption ]
+  | [ |- sto_trace ((?tid, seq_point) :: ?t) ] =>
+    constructor; [ fix_phase | | assumption ]
+  | [ |- sto_trace ((?tid, validate_read_item _) :: ?t) ] =>
+    constructor; [ fix_phase .. | | assumption ]
+  | [ |- sto_trace ((?tid, abort_txn) :: ?t) ] =>
+    constructor; [ fix_phase .. | assumption ]
+  | [ |- sto_trace ((?tid, unlock_write_item) :: ?t) ] =>
+    constructor; [ fix_phase .. | assumption ]
+  | [ |- sto_trace ((?tid, commit_txn) :: ?t) ] =>
+    constructor; [ fix_phase .. | | assumption ]
+  | [ H: trace_tid_last_write ?tid _ = Some ?vx
+      |- sto_trace ((?tid, complete_write_item (S (write_version ?t))) :: ?t) ] =>
+    apply complete_write_item_step with (val:=vx); [ fix_phase .. | assumption ]
+  | [ |- sto_trace ((?tid, commit_done_txn) :: ?t) ] =>
+    constructor; [ fix_phase .. | assumption ]
+  | _ => idtac
+  end.
+Local Ltac chomp1 :=
+  match goal with
+  | [ |- sto_trace ((?tid, start_txn) :: _ :: _) ] =>
+    constructor; [ assumption | | ]; fix_phase
+  | [ |- sto_trace ((?tid, read_item (write_version ?t)) :: ?p :: ?t) ] =>
+    replace (write_version t) with (write_version (p :: t)) by (now cbn);
+    constructor; fix_phase
+  | [ |- sto_trace ((?tid, write_item _) :: _ :: _) ] =>
+    constructor; fix_phase
+  | [ |- sto_trace ((?tid, try_commit_txn) :: _ :: _) ] =>
+    constructor; fix_phase
+  | [ H: In (?tid, write_item ?vv) _
+      |- sto_trace ((?tid, lock_write_item) :: _ :: _) ] =>
+    apply lock_write_item_step with (v:=vv); fix_phase
+  | [ |- sto_trace ((?tid, seq_point) :: _ :: _) ] =>
+    constructor; fix_phase
+  | [ |- sto_trace ((?tid, validate_read_item ?vers) :: _ :: _) ] =>
+    constructor; fix_phase
+  | [ |- sto_trace ((?tid, abort_txn) :: _ :: _) ] =>
+    constructor; fix_phase
+  | [ |- sto_trace ((?tid, unlock_write_item) :: _ :: _) ] =>
+    constructor; fix_phase
+  | [ |- sto_trace ((?tid, commit_txn) :: _ :: _) ] =>
+    constructor; fix_phase
+  | [ H: trace_tid_last_write ?tid _ = Some ?vx
+      |- sto_trace ((?tid, complete_write_item (S (write_version ?t))) :: ?p :: ?t) ] =>
+    replace (write_version t) with (write_version (p :: t)) by (now cbn);
+    apply complete_write_item_step with (val:=vx); fix_phase
+  | [ |- sto_trace ((?tid, commit_done_txn) :: _ :: _) ] =>
+    constructor; fix_phase
+  end.
+
+
+
+Lemma trace_swap_internal_back tid1 tid2 a1 a2 t:
+  sto_trace ((tid2, a2) :: (tid1, a1) :: t) ->
+  action_internal a2 ->
+  tid1 <> tid2 ->
+  sto_trace ((tid1, a1) :: (tid2, a2) :: t).
+Proof.
+  intros T Int N.
+  assert (tid_phase tid1 ((tid2, a2) :: t) = tid_phase tid1 t) as TP1. {
+    cbn; destruct (Nat.eq_dec tid1 tid2); congruence.
+  }
+  assert (tid_phase tid2 ((tid1, a1) :: t) = tid_phase tid2 t) as TP2. {
+    cbn; destruct (Nat.eq_dec tid2 tid1); congruence.
+  }
+
+  inversion T; check_action.
+  all: match goal with
+       | [ H: sto_trace ((?t1, ?a1) :: ?t), H2: sto_trace (?a :: ?b :: ?c) |- _ ] =>
+         rename H into T1
+       end.
+
+  - inversion T1; chomp1.
+  - inversion T1; chomp1.
+  - inversion T1; chomp1.
+  - inversion T1; chomp1.
+    all: intros vx I.
+    all: assert (In (tid2, write_item vx) t0) as II by (rewrite H1; now right).
+    all: rewrite H1 in II; apply H3 in II; destruct II; [ congruence | assumption ].
+  - inversion T1; chomp1.
+  - inversion T1; chomp1.
+    all: intros vers' I.
+    all: assert (In (tid2, read_item vers') t0) as II by (rewrite H1; now right).
+    all: rewrite H1 in II; apply H3 in II; destruct II; [ congruence | assumption ].
+  - assert (tid2 > 0) by (apply (trace_in_nonzero _ commit_done_txn _ T); now left).
+    inversion T1; chomp1.
+    all: rewrite <- H6 in *; cbn in H3; try assumption.
+    rewrite H10; omega.
+    all: now rewrite H9.
+Qed.
+
+Lemma trace_swap_internal_forward tid1 tid2 a1 a2 t:
+  sto_trace ((tid2, a2) :: (tid1, a1) :: t) ->
+  action_internal a1 ->
+  tid1 <> tid2 ->
+  sto_trace ((tid1, a1) :: (tid2, a2) :: t).
+Proof.
+  intros T Int N.
+  assert (tid_phase tid1 ((tid2, a2) :: t) = tid_phase tid1 t) as TP1. {
+    cbn; destruct (Nat.eq_dec tid1 tid2); congruence.
+  }
+  assert (tid_phase tid2 ((tid1, a1) :: t) = tid_phase tid2 t) as TP2. {
+    cbn; destruct (Nat.eq_dec tid2 tid1); congruence.
+  }
+
+  inversion T; rewrite <- H0 in *; clear H0.
+  all: match goal with
+       | [ H: sto_trace ((?t1, ?a1) :: ?t), H2: sto_trace (?a :: ?b :: ?c) |- _ ] =>
+         rename H into T1
+       end.
+
+  - inversion T1; chomp1.
+  - rewrite H1 in *; clear H1.
+    replace (write_version ((tid1, a1) :: t)) with (write_version t) in *.
+    inversion T1; check_action; chomp1.
+    destruct a1; cbn in Int; try contradiction Int; cbn; reflexivity.
+  - inversion T1; chomp1.
+  - inversion T1; chomp1.
+  - inversion T1; check_action; chomp1.
+    cbn; congruence.
+  - inversion T1; chomp1.
+    all: intros vx I.
+    all: assert (In (tid2, write_item vx) t0) as II by (rewrite H1; now right).
+    all: rewrite H1 in II; apply H3 in II; destruct II; [ congruence | assumption ].
+  - inversion T1; check_action; subst; chomp1.
+    all: cbn; reflexivity.
+  - inversion T1; chomp1.
+  - inversion T1; check_action; chomp1.
+    assert (tid1 > 0) as TZ by (apply (trace_in_nonzero _ commit_done_txn _ T1); now left).
+    cbn; omega.
+  - inversion T1; chomp1.
+    all: intros vers' I.
+    all: assert (In (tid2, read_item vers') t0) as II by (rewrite H1; now right).
+    all: rewrite H1 in II; apply H3 in II; destruct II; [ congruence | assumption ].
+  - rewrite H1 in *; clear H1.
+    replace (write_version ((tid1, a1) :: t)) with (write_version t) in *.
+    inversion T1; check_action; chomp1.
+    assert (tid1 > 0) as TZ by (apply (trace_in_nonzero _ commit_done_txn _ T1); now left).
+    cbn; omega.
+    destruct a1; cbn in Int; try contradiction Int; cbn; reflexivity.
+  - assert (tid2 > 0) as TZ by (apply (trace_in_nonzero _ commit_done_txn _ T); now left).
+    inversion T1; chomp1.
+    all: rewrite <- H5 in *; clear H5.
+    all: cbn in H3; try apply H3.
+    rewrite H9; omega.
+    all: now rewrite H8.
+Qed.
+
+Lemma trace_swap_read_back tid1 tid2 v a1 t:
+  sto_trace ((tid2, read_item v) :: (tid1, a1) :: t) ->
+  action_commute_read a1 ->
+  tid1 <> tid2 ->
+  sto_trace ((tid1, a1) :: (tid2, read_item v) :: t).
+Proof.
+  intros T Int N.
+  assert (tid_phase tid1 ((tid2, read_item v) :: t) = tid_phase tid1 t) as TP1. {
+    cbn; destruct (Nat.eq_dec tid1 tid2); congruence.
+  }
+  assert (tid_phase tid2 ((tid1, a1) :: t) = tid_phase tid2 t) as TP2. {
+    cbn; destruct (Nat.eq_dec tid2 tid1); congruence.
+  }
+
+  inversion T.
+  assert (write_version ((tid1, a1) :: t) = write_version t) as WV. {
+    destruct a1; cbn in Int; try contradiction; cbn; reflexivity.
+  }
+  rewrite WV.
+  rename H4 into T1.
+
+  inversion T1; check_action; chomp1.
+  all: cbn; destruct (Nat.eq_dec tid1 tid2); [ congruence | auto ].
+  constructor; fix_phase; auto.
+Qed.
+
+Lemma trace_swap_validate_read_back tid1 tid2 v a1 t:
+  sto_trace ((tid2, validate_read_item v) :: (tid1, a1) :: t) ->
+  action_commute_read a1 ->
+  tid1 <> tid2 ->
+  sto_trace ((tid1, a1) :: (tid2, validate_read_item v) :: t).
+Proof.
+  intros T Int N.
+  assert (tid_phase tid1 ((tid2, validate_read_item v) :: t) = tid_phase tid1 t) as TP1. {
+    cbn; destruct (Nat.eq_dec tid1 tid2); congruence.
+  }
+  assert (tid_phase tid2 ((tid1, a1) :: t) = tid_phase tid2 t) as TP2. {
+    cbn; destruct (Nat.eq_dec tid2 tid1); congruence.
+  }
+
+  inversion T.
+  assert (write_version ((tid1, a1) :: t) = write_version t) as WV. {
+    destruct a1; cbn in Int; try contradiction; cbn; reflexivity.
+  }
+  rename H5 into T1.
+
+  inversion T1; check_action; chomp1.
+  all: cbn in WV; auto.
+Qed.
+
+Lemma trace_swap_read_forward tid1 tid2 v a2 t:
+  sto_trace ((tid2, a2) :: (tid1, read_item v) :: t) ->
+  action_commute_read a2 ->
+  tid1 <> tid2 ->
+  sto_trace ((tid1, read_item v) :: (tid2, a2) :: t).
+Proof.
+  intros T Int N.
+  assert (tid_phase tid1 ((tid2, a2) :: t) = tid_phase tid1 t) as TP1. {
+    cbn; destruct (Nat.eq_dec tid1 tid2); congruence.
+  }
+  assert (tid_phase tid2 ((tid1, read_item v) :: t) = tid_phase tid2 t) as TP2. {
+    cbn; destruct (Nat.eq_dec tid2 tid1); congruence.
+  }
+
+  inversion T; check_action.
+  all: match goal with
+       | [ H: sto_trace ((?t1, ?a1) :: ?t), H2: sto_trace (?a :: ?b :: ?c) |- _ ] =>
+         rename H into T1
+       end.
+  all: inversion T1; chomp1.
+  - cbn; destruct (Nat.eq_dec tid1 tid2); auto.
+  - cbn; fix_phase.
+  - intros vx I.
+    assert (In (tid2, write_item vx) t0) as II by (rewrite H1; now right).
+    rewrite H1 in II; apply H3 in II; destruct II; [ congruence | assumption ].
+  - rewrite <- H4; cbn; reflexivity.
+  - intros vers' I.
+    assert (In (tid2, read_item vers') t0) as II by (rewrite H1; now right).
+    rewrite H1 in II; apply H3 in II; destruct II; [ congruence | assumption ].
+  - assert (tid2 > 0) by (apply (trace_in_nonzero _ commit_done_txn _ T); now left).
+    omega.
+Qed.
+
+Lemma trace_swap_validate_read_forward tid1 tid2 v a2 t:
+  sto_trace ((tid2, a2) :: (tid1, validate_read_item v) :: t) ->
+  action_commute_read a2 ->
+  tid1 <> tid2 ->
+  sto_trace ((tid1, validate_read_item v) :: (tid2, a2) :: t).
+Proof.
+  intros T Int N.
+  assert (tid_phase tid1 ((tid2, a2) :: t) = tid_phase tid1 t) as TP1. {
+    cbn; destruct (Nat.eq_dec tid1 tid2); congruence.
+  }
+  assert (tid_phase tid2 ((tid1, validate_read_item v) :: t) = tid_phase tid2 t) as TP2. {
+    cbn; destruct (Nat.eq_dec tid2 tid1); congruence.
+  }
+
+  inversion T; check_action.
+  all: match goal with
+       | [ H: sto_trace ((?t1, ?a1) :: ?t), H2: sto_trace (?a :: ?b :: ?c) |- _ ] =>
+         rename H into T1
+       end.
+  all: inversion T1; chomp1.
+  - cbn; destruct (Nat.eq_dec tid1 tid2); [ congruence | auto ].
+  - cbn; fix_phase.
+  - intros vx I.
+    assert (In (tid2, write_item vx) t0) as II by (rewrite H1; now right).
+    rewrite H1 in II; apply H3 in II; destruct II; [ congruence | assumption ].
+  - rewrite <- H4; cbn; reflexivity.
+  - intros vers' I.
+    assert (In (tid2, read_item vers') t0) as II by (rewrite H1; now right).
+    rewrite H1 in II; apply H3 in II; destruct II; [ congruence | assumption ].
+  - apply locked_by_self_or in H8.
+    destruct H8.
+    assert (tid2 > 0) by (apply (trace_in_nonzero _ commit_done_txn _ T); now left).
+    omega.
+    rewrite H8; auto.
+Qed.
+
+Lemma trace_swap_forward_to_seq_point tid1 tid2 a1 a2 t:
+  sto_trace ((tid2, a2) :: (tid1, a1) :: t) ->
+  tid1 <> tid2 ->
+  action_phase a1 < 3 ->
+  locked_by ((tid2, a2) :: t) tid1 = tid1 ->
+  write_version ((tid2, a2) :: t) = write_version t ->
+  sto_trace ((tid1, a1) :: (tid2, a2) :: t).
+Proof.
+  intros T N AP LB WV.
+  assert (write_version ((tid1, a1) :: t) = write_version t) as WV1. {
+    destruct a1; cbn in AP; try omega.
+    all: cbn; reflexivity.
+  }
+  assert (tid1 > 0) as T1Z. {
+    apply (trace_in_nonzero _ a1 _ T); right; now left.
+  }
+  assert (tid2 > 0) as T2Z. {
+    apply (trace_in_nonzero _ a2 _ T); now left.
+  }
+  assert (tid_phase tid1 ((tid2, a2) :: t) = tid_phase tid1 t) as TP1. {
+    cbn; destruct (Nat.eq_dec tid1 tid2); congruence.
+  }
+  assert (tid_phase tid2 ((tid1, a1) :: t) = tid_phase tid2 t) as TP2. {
+    cbn; destruct (Nat.eq_dec tid2 tid1); congruence.
+  }
+
+  inversion T; rewrite <- H0 in *; clear H0.
+  all: match goal with
+       | [ H: sto_trace ((?tid, ?a) :: ?t) |- _ ] => rename H into T1
+       end.
+  all: try rewrite H1 in *; clear H H1.
+  all: try solve [ apply trace_swap_internal_back; [ assumption | now cbn | assumption ] ].
+  - rewrite WV1.
+    apply trace_swap_read_back; auto.
+    rewrite <- WV1; auto.
+    destruct a1; cbn in AP; try omega; cbn; auto.
+    cbn in H3; omega.
+  - cbn in LB; congruence.
+  - apply trace_swap_validate_read_back; auto.
+    destruct a1; cbn in AP; try omega; cbn; auto.
+  - inversion T1; check_action; chomp1.
+    all: cbn; auto.
+    cbn in H3; congruence.
+  - cbn in WV; destruct a1; cbn in AP; try omega.
+Qed.    
+
+Definition all_committed (t:trace) :=
+  forall tid, tid_phase tid t = 4.
+
+Fixpoint tid_outstanding_read tid (t:trace) :=
+  match t with
+  | (tid', validate_read_item _) :: t' =>
+    tid <> tid' /\ tid_outstanding_read tid t'
+  | (tid', read_item _) :: t' =>
+    tid = tid' \/ tid_outstanding_read tid t'
+  | _ :: t' => tid_outstanding_read tid t'
+  | [] => False
+  end.
+
+Inductive trace_unconflicted : trace -> Prop :=
+| nil_unc: trace_unconflicted []
+| internal_unc: forall tid a t,
+    trace_unconflicted t ->
+    action_internal a ->
+    trace_unconflicted ((tid, a) :: t)
+| read_unc: forall tid v t,
+    trace_unconflicted t ->
+    locked_by t 0 = 0 ->
+    write_version t = v ->
+    trace_unconflicted ((tid, read_item v) :: t)
+| validate_read_unc: forall tid v t,
+    trace_unconflicted t ->
+    trace_unconflicted ((tid, validate_read_item v) :: t)
+| lock_unc: forall tid t,
+    trace_unconflicted t ->
+    (forall tid', tid = tid' \/ ~ tid_outstanding_read tid t) ->
+    trace_unconflicted ((tid, lock_write_item) :: t)
+| complete_unc: forall tid v t,
+    trace_unconflicted t ->
+    trace_unconflicted ((tid, complete_write_item v) :: t)
+| unlock_unc: forall tid t,
+    trace_unconflicted t ->
+    trace_unconflicted ((tid, unlock_write_item) :: t).
+
+Lemma phase3_locked tid t:
+  sto_trace t ->
+  tid_phase tid t < 4 ->
+  In (tid, lock_write_item) t ->
+  locked_by t 0 = tid.
+Proof.
+  intros T; induction T; intros P I.
+  all: cbn in *; try contradiction.
+  all: destruct (Nat.eq_dec tid tid0); try omega.
+  all: destruct or I; try congruence; auto.
+  all: assert (2 <= tid_phase tid t) as P2
+      by (replace 2 with (action_phase lock_write_item) by (now cbn);
+          apply phase_increase_in; auto).
+  all: try solve [ rewrite <- e in *; omega ].
+  - rewrite (IHT P I) in H1.
+    assert (tid > 0) by (apply trace_phase_nonzero with (t:=t); auto; omega); omega.
+  - rewrite <- e in *; clear e P.
+    assert (tid_phase tid t < 4) as TL by omega; auto.
+  - rewrite <- e in *; clear e P.
+    assert (tid_phase tid t < 4) as TL by omega; auto.
+  - rewrite (IHT P I) in H0; congruence.
+  - rewrite (IHT P I) in H0; congruence.
+Qed.
+
+Lemma committed_write_locked_or_completed tid t:
+  sto_trace t ->
+  tid_phase tid t = 4 ->
+  In (tid, lock_write_item) t ->
+  locked_by t 0 = tid \/ exists v, In (tid, complete_write_item v) t.
+Proof.
+  intros T; induction T; intros P I.
+  all: cbn in *; try contradiction.
+  all: destruct (Nat.eq_dec tid tid0); try omega.
+  all: destruct or I; try congruence.
+  all: try solve [ generalize (IHT P I); intros X; destruct X as [X | [vv X]];
+                   [ now left | right; exists vv; now right ] ].
+  - generalize (IHT P I); intros X; destruct X as [X | [vv X]].
+    assert (tid > 0) as NZ by (apply trace_phase_nonzero with (t:=t); auto; omega).
+    omega.
+    right; exists vv; now right.
+  - generalize (IHT P I); intros X; destruct X as [X | [vv X]].
+    congruence.
+    right; exists vv; now right.
+  - rewrite <- e in *; clear e P; left.
+    apply phase3_locked; auto; omega.
+  - right; exists (S (write_version t)); rewrite e; now left.
+  - generalize (IHT P I); intros X; destruct X as [X | [vv X]].
+    congruence.
+    right; exists vv; now right.
+  - rewrite <- e in *; clear e P.
+    generalize (IHT H I); intros X; destruct X as [X | [vv X]].
+    now left.
+    right; exists vv; now right.
+Qed.
+
+Lemma committed_read_validated tid t v:
+  sto_trace t ->
+  tid_phase tid t = 4 ->
+  In (tid, read_item v) t ->
+  In (tid, validate_read_item v) t.
+Proof.
+  intros T; induction T; intros P I.
+  all: cbn in *; try contradiction.
+  all: destruct (Nat.eq_dec tid tid0); try omega.
+  all: destruct or I; try congruence.
+  all: try solve [ generalize (IHT P I); intros X; now right ].
+  - right; rewrite <- e in *; auto.
+  - rewrite <- e in *; auto.
+  - rewrite <- e in *; auto.
+Qed.
+
+Lemma outstanding_read_item tid t:
+  tid_outstanding_read tid t ->
+  exists v, In (tid, read_item v) t.
+Proof.
+  induction t; intros; cbn in *.
+  contradiction.
+  destruct a; destruct a.
+  3: destruct H; [ exists v; rewrite H; now left | ].
+  8: destruct H as [N H].
+  all: try solve [ generalize (IHt H) as X; intros X; destruct X as [vv X]; exists vv; now right ].
+Qed.
+
+Lemma outstanding_read_no_validate tid t v:
+  sto_trace t ->
+  tid_outstanding_read tid t ->
+  ~ In (tid, validate_read_item v) t.
+Proof.
+  intros T; induction T; intros; cbn in *.
+  contradiction.
+  all: intros F; destruct F as [F | F]; try congruence.
+  all: repeat match goal with
+              | [ H: _ \/ _ |- _ ] => destruct or H
+              | [ H: _ /\ _ |- _ ] => destruct H
+              | [ H: tid_outstanding_read _ _ |- _ ] => rename H into IR
+              end.
+  all: try solve [ apply (IHT IR F) ].
+  assert (3 <= tid_phase tid0 t). {
+    replace 3 with (action_phase (validate_read_item v)) by (now cbn).
+    apply phase_increase_in; subst; auto.
+  }
+  omega.
+  congruence.
+Qed.
+
+Lemma commitable_unconflicted t:
+  sto_trace t ->
+  (exists t2, sto_trace (t2 ++ t) /\ all_committed (t2 ++ t)) ->
+  trace_unconflicted t.
+Proof.
+  intros T; induction T; intros NU; destruct NU as [t2 [NU1 NU2]].
+  1: constructor.
+  Local Ltac myexists :=
+    match goal with
+    | [ IHT: ?a -> trace_unconflicted ?t1,
+        H: sto_trace (?t2 ++ ?p :: ?t1) |- _ ] =>
+      apply IHT; exists (t2 ++ [p]); rewrite <- app_assoc; cbn; split; auto
+    end.
+  all: try solve [apply internal_unc; [| cbn]; auto; myexists].
+  - apply read_unc; auto; myexists.
+  - apply lock_unc; [ myexists | ].
+    assert (tid_phase tid0 (t2 ++ (tid0, lock_write_item) :: t) = 4) as TP4. {
+      apply NU2.
+    }
+    assert (In (tid0, lock_write_item) (t2 ++ (tid0, lock_write_item) :: t)) as IN. {
+      apply in_or_app; right; now left.
+    }
+    generalize (committed_write_locked_or_completed _ _ NU1 TP4 IN); intros X.
+    intros tid; destruct (Nat.eq_dec tid0 tid); [ now left | right ].
+    intros F.
+    generalize (outstanding_read_item _ _ F); intros EXR; destruct EXR as [vers EXR].
+    generalize (outstanding_read_no_validate _ _ vers T F); intros ENV.
+    (* destruct X as [X | [vv X]]. *)
+    admit.
+  - apply validate_read_unc; auto; myexists.
+  - apply unlock_unc; auto; myexists.
+  - apply complete_unc; auto; myexists.
+Admitted.
+
+
+
+Lemma no_uncommitted_allows_swap_forward_to_seq_point tid1 tid2 a1 a2 t1 t2:
+  no_uncommitted (t1 ++ (tid2, a2) :: (tid1, a1) :: t2) ->
+  sto_trace (t1 ++ (tid2, a2) :: (tid1, a1) :: t2) ->
+  tid1 <> tid2 ->
+  action_phase a1 < 3 ->
+  sto_trace (t1 ++ (tid1, a1) :: (tid2, a2) :: t2).
+Proof.
+  revert tid1 tid2 a1 a2 t2; induction t1;
+    intros tid1 tid2 a1 a2 t2 NU T N AP.
+
+  cbn in *.
+  assert (tid_phase 
+  intros T N AP LB WV.
+  assert (write_version ((tid1, a1) :: t) = write_version t) as WV1. {
+    destruct a1; cbn in AP; try omega.
+    all: cbn; reflexivity.
+  }
+  assert (tid1 > 0) as T1Z. {
+    apply (trace_in_nonzero _ a1 _ T); right; now left.
+  }
+  assert (tid2 > 0) as T2Z. {
+    apply (trace_in_nonzero _ a2 _ T); now left.
+  }
+  assert (tid_phase tid1 ((tid2, a2) :: t) = tid_phase tid1 t) as TP1. {
+    cbn; destruct (Nat.eq_dec tid1 tid2); congruence.
+  }
+  assert (tid_phase tid2 ((tid1, a1) :: t) = tid_phase tid2 t) as TP2. {
+    cbn; destruct (Nat.eq_dec tid2 tid1); congruence.
+  }
+
+  inversion T; rewrite <- H0 in *; clear H0.
+  all: match goal with
+       | [ H: sto_trace ((?tid, ?a) :: ?t) |- _ ] => rename H into T1
+       end.
+  all: try rewrite H1 in *; clear H H1.
+  all: try solve [ apply trace_swap_internal_back; [ assumption | now cbn | assumption ] ].
+  - rewrite WV1.
+    apply trace_swap_read_back; auto.
+    rewrite <- WV1; auto.
+    destruct a1; cbn in AP; try omega; cbn; auto.
+    cbn in H3; omega.
+  - cbn in LB; congruence.
+  - apply trace_swap_validate_read_back; auto.
+    destruct a1; cbn in AP; try omega; cbn; auto.
+  - inversion T1; check_action; chomp1.
+    all: cbn; auto.
+    cbn in H3; congruence.
+  - cbn in WV; destruct a1; cbn in AP; try omega.
+Qed.    
+
 
 Lemma trace_swap_forward_1 t1 t2 tid1 tid2 a1 a2:
   sto_trace ((tid1, commit_txn) :: t1 ++ (tid2, a2) :: (tid1, a1) :: t2) ->
