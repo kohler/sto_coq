@@ -84,6 +84,20 @@ Proof.
   cbn; destruct (Nat.eq_dec tid tid); congruence.
 Qed.
 
+Lemma tid_phase_in tid t n:
+  tid_phase tid t = n ->
+  n > 0 ->
+  exists a, In (tid, a) t /\ action_phase a = n.
+Proof.
+  induction t; intros; cbn in H.
+  omega.
+  destruct a as [tid' a]; destruct (Nat.eq_dec tid tid').
+  rewrite e; exists a; intuition.
+  generalize (IHt H H0); intros X; destruct X as [a0 [I P]].
+  exists a0; intuition.
+Qed.
+
+
 (* Return the version number of the last committed write *)
 Fixpoint write_version (t:trace): version :=
   match t with
@@ -197,13 +211,6 @@ Inductive sto_trace : trace -> Prop :=
     -> sto_trace t
     -> sto_trace ((tid, commit_done_txn) :: t).
 Hint Constructors sto_trace.
-
-
-Definition example_txn:=
-[(2, commit_done_txn); (2, complete_write_item 1); (2, commit_txn); (2, validate_read_item 0); (2, seq_point); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (2, read_item 0); (2, start_txn); (1, commit_done_txn); (1, commit_txn); (1, validate_read_item 0); (1, seq_point); (1, try_commit_txn); (1, read_item 0); (1, start_txn)].
-
-Definition example_txn2:=
-[(3, commit_done_txn); (3, commit_txn); (3, validate_read_item 1); (3, seq_point); (3, try_commit_txn); (3, read_item 1); (3, start_txn); (1, abort_txn); (1, validate_read_item 1); (1, try_commit_txn); (2, commit_txn); (2, complete_write_item 1); (2, commit_txn); (2, validate_read_item 0); (2, seq_point); (2, lock_write_item); (2, try_commit_txn); (2, write_item 4); (1, read_item 0); (2, read_item 0); (2, start_txn); (1, start_txn)].
 
 
 (** Facts about traces *)
@@ -836,10 +843,6 @@ Fixpoint seq_list' (t:trace) (c:list nat) : list nat :=
   end.
 
 Definition seq_list t := seq_list' t [].
-
-Eval compute in seq_list example_txn.
-
-Eval compute in seq_list example_txn2.
 
 Definition filter_tid tid (t:trace) :=
   filter (fun x => Nat.eqb tid (fst x)) t.
@@ -2079,63 +2082,65 @@ Qed.
 
 
 
-Function swap_forward_once (t:trace) { measure length t } :=
+Function swap_once (t:trace) { measure length t } :=
   match t with
   | (tid2, a2) :: (tid1, a1) :: t' =>
     if Nat.eq_dec tid2 tid1
-    then (tid2, a2) :: swap_forward_once ((tid1, a1) :: t')
-    else if action_phase a1 <? 3
+    then (tid2, a2) :: swap_once ((tid1, a1) :: t')
+    else if (action_phase a1 <? 3) || (3 <=? action_phase a2)
          then (tid1, a1) :: (tid2, a2) :: t'
-         else (tid2, a2) :: swap_forward_once ((tid1, a1) :: t')
+         else (tid2, a2) :: swap_once ((tid1, a1) :: t')
   | _ => t
   end.
 Proof.
   all: intros; cbn; apply lt_n_S; omega.
 Defined.
 
-Lemma swap_forward_once_result t:
-  swap_forward_once t = t
+Lemma swap_once_result t:
+  swap_once t = t
   \/ (exists t1 t2 tid1 tid2 a1 a2,
          t = t1 ++ (tid2, a2) :: (tid1, a1) :: t2
          /\ tid1 <> tid2
-         /\ action_phase a1 < 3
-         /\ swap_forward_once t = t1 ++ (tid1, a1) :: (tid2, a2) :: t2).
+         /\ (action_phase a1 < 3 \/ 3 <= action_phase a2)
+         /\ swap_once t = t1 ++ (tid1, a1) :: (tid2, a2) :: t2).
 Proof.
-  functional induction (swap_forward_once t); cbn; auto.
+  functional induction (swap_once t); cbn; auto.
   - destruct IHt0.
-    left; now rewrite H.
-    destruct H as [t1 [t2 [tid1 [tid3 [a4 [a3 H]]]]]].
-    right.
-    exists ((tid2, a2) :: t1), t2, tid1, tid3, a4, a3.
-    intuition.
-    now rewrite H0.
-    now rewrite H3.
+    + left; now rewrite H.
+    + right; destruct H as [t1 [t2 [tid1 [tid3 [a4 [a3 H]]]]]].
+      exists ((tid2, a2) :: t1), t2, tid1, tid3, a4, a3.
+      intuition.
+      1,3: now rewrite H0.
+      all: now rewrite H3.
   - right.
     exists [], t', tid1, tid2, a1, a2.
     intuition.
-    now rewrite <- Nat.ltb_lt.
+    rewrite orb_true_iff in e1; destruct or e1.
+    left; now rewrite <- Nat.ltb_lt.
+    right; now rewrite <- Nat.leb_le.
   - destruct IHt0.
-    left; now rewrite H.
-    destruct H as [t1 [t2 [tid0 [tid3 [a4 [a3 H]]]]]].
-    right.
-    exists ((tid2, a2) :: t1), t2, tid0, tid3, a4, a3.
-    intuition.
-    now rewrite H0.
-    now rewrite H3.
+    + left; now rewrite H.
+    + right; destruct H as [t1 [t2 [tid0 [tid3 [a4 [a3 H]]]]]].
+      exists ((tid2, a2) :: t1), t2, tid0, tid3, a4, a3.
+      intuition.
+      1,3: now rewrite H0.
+      all: now rewrite H3.
 Qed.
   
-Lemma swap_forward_once_correct t:
+Lemma swap_once_correct t:
   sto_trace t ->
   all_committed t ->
-  sto_trace (swap_forward_once t).
+  sto_trace (swap_once t).
 Proof.
   intros T A.
-  destruct (swap_forward_once_result t).
-  now rewrite H.
-  destruct H as [t1 [t2 [tid1 [tid2 [a1 [a2 [H [N [AP S]]]]]]]]].
-  rewrite S.
-  rewrite H in *.
-  apply swap_forward_all_committed; auto.
+  destruct (swap_once_result t).
+  - now rewrite H.
+  - destruct H as [t1 [t2 [tid1 [tid2 [a1 [a2 [H [N [AP S]]]]]]]]].
+    rewrite S.
+    rewrite H in *.
+    destruct or AP.
+    + apply swap_forward_all_committed; auto.
+    + apply swap_backward_all_committed; auto.
 Qed.
 
 Inductive serial_trace : trace -> Prop :=
@@ -2150,25 +2155,31 @@ Inductive serial_trace : trace -> Prop :=
     tid_phase tid1 ((tid2, a2) :: t) = 0 ->
     serial_trace ((tid1, a1) :: (tid2, a2) :: t).
 
-Lemma swap_forward_once_fixpoint_contents t:
-  swap_forward_once t = t ->
-  forall t1 tid1 tid2 a1 a2 t2,
+Lemma swap_once_fixpoint_contents t:
+  swap_once t = t ->
+  forall t1 tid2 a2 tid1 a1 t2,
     t = t1 ++ (tid2, a2) :: (tid1, a1) :: t2 ->
-    tid1 = tid2 \/ 3 <= action_phase a1.
+    tid1 = tid2 \/ (3 <= action_phase a1 /\ action_phase a2 < 3).
 Proof.
-  functional induction (swap_forward_once t).
+  functional induction (swap_once t).
   all: intros S.
   - inversion S; rewrite H0; intros.
     destruct t1; cbn in *; inversion H.
     now left.
-    apply (IHt0 H0 t1 tid1 tid0 a0 a3 t2); auto.
+    apply (IHt0 H0 t1 tid0 a0 tid1 a3 t2); auto.
   - inversion S; subst.
     destruct (Nat.eq_dec tid2 tid2); congruence.
   - inversion S; rewrite H0; intros.
     destruct t1; cbn in *; inversion H.
     right.
-    rewrite leb_iff_conv in e1; rewrite <- H5; omega.
-    apply (IHt0 H0 t1 tid0 tid3 a0 a3 t2); auto.
+    rewrite orb_false_iff in e1; destruct e1 as [e1 e1b].
+    rewrite H3, H5 in *; clear H3 H5 a2 a1.
+    split.
+    rewrite leb_iff_conv in e1; omega.
+    destruct (action_phase a0); [omega|].
+    destruct n; [omega|].
+    destruct n; [omega|discriminate].
+    apply (IHt0 H0 t1 tid0 a0 tid3 a3 t2); auto.
   - intros.
     destruct t.
     destruct t1; discriminate.
@@ -2177,67 +2188,229 @@ Proof.
     destruct p; destruct p0; contradiction.
 Qed.
 
-(* the following is not true *)
-Lemma swap_forward_once_fixpoint_serial t:
+Lemma swap_once_fixpoint_tail a t:
+  swap_once (a :: t) = a :: t ->
+  swap_once t = t.
+Proof.
+  intros Sw; destruct t; auto.
+  destruct a, p.
+  rewrite swap_once_equation in Sw.
+  destruct (Nat.eq_dec t0 t1).
+  inversion Sw; now rewrite H0.
+  destruct ((action_phase a0 <? 3) || (3 <=? action_phase a)).
+  inversion Sw; congruence.
+  inversion Sw; now rewrite H0.
+Qed.
+
+
+Lemma tid_phase_zero_not_in tid t:
+  sto_trace t ->
+  tid_phase tid t = 0 ->
+  forall a, ~ In (tid, a) t.
+Proof.
+  induction t; intros T P aa I; destruct I.
+  rewrite H in *; clear H.
+  cbn in P; destruct (Nat.eq_dec tid tid); try congruence.
+  inversion T; rewrite <- H0 in P; cbn in P; discriminate.
+  revert H; apply (IHt (trace_cons _ _ T)).
+  assert (tid_phase tid ([a] ++ t) >= tid_phase tid t) by (now apply phase_increase_app).
+  replace ([a] ++ t) with (a::t) in H. rewrite P in H; omega.
+  now cbn.
+Qed.
+
+Lemma tid_phase_not_in_zero tid t:
+  sto_trace t ->
+  (forall a, ~ In (tid, a) t) ->
+  tid_phase tid t = 0.
+Proof.
+  induction t; intros T F; cbn; auto.
+  destruct a.
+  destruct (Nat.eq_dec tid t0).
+  assert (In (tid, a) ((t0, a) :: t)) by (left; now rewrite e).
+  now apply F in H.
+  apply IHt.
+  now apply trace_cons in T.
+  intros aa I.
+  apply (F aa).
+  now right.
+Qed.
+
+
+Lemma the_stupidest_helper tid a (t:trace):
+  In (tid, a) t ->
+  exists a' t1 t2, t = t1 ++ (tid, a') :: t2
+                   /\ forall a'', ~ In (tid, a'') t1.
+Proof.
+  intros I.
+  apply in_split in I.
+  destruct I as [l1 [l2 I]].
+  revert l2 t I.
+  induction l1; intros l2 t I.
+  exists a, [], l2; intuition.
+  destruct a0.
+  destruct (Nat.eq_dec t0 tid).
+  rewrite e in *.
+  exists a0, [], (l1 ++ (tid, a) :: l2); intuition.
+  generalize (IHl1 l2 (l1 ++ (tid, a) :: l2) eq_refl); intros X.
+  destruct X as [aa [t1 [t2 [E A]]]].
+  exists aa, ((t0, a0) :: t1), t2; intuition.
+  rewrite <- app_comm_cons in *; now rewrite <- E.
+  destruct H; [congruence|now apply A in H].
+Qed.
+
+Lemma swap_once_fixpoint_serial t:
   sto_trace t ->
   (exists t2, all_committed (t2 ++ t)) ->
-  swap_forward_once t = t ->
+  swap_once t = t ->
   serial_trace t.
 Proof.
-  induction t; intros T E S.
+  induction t; intros T E Sw.
   constructor.
   assert (serial_trace t). {
     apply IHt.
     apply (trace_cons _ _ T).
     destruct E as [t2 E].
     exists (t2 ++ [a]); rewrite <- app_assoc; simpl; auto.
-    destruct a; destruct t; rewrite swap_forward_once_equation in S.
+    destruct a; destruct t; rewrite swap_once_equation in Sw.
     cbn; auto.
     destruct p.
     destruct (Nat.eq_dec t0 t1).
-    inversion S; rewrite H0; auto.
+    inversion Sw; rewrite H0; auto.
     remember (action_phase a0 <? 3) as A; destruct A.
-    inversion S; subst; contradiction.
-    inversion S; rewrite H0; auto.
+    rewrite orb_true_l in Sw; inversion Sw; subst; contradiction.
+    remember (3 <=? action_phase a) as AA; destruct AA.
+    rewrite orb_true_r in Sw; inversion Sw; subst; contradiction.
+    cbn in Sw; inversion Sw; rewrite H0; auto.
   }
-  generalize (swap_forward_once_fixpoint_contents _ S); intros X.
-  destruct t.
-  destruct a; apply serial_singleton.
-  destruct a; destruct p.
-  generalize (X [] t1 t0 a0 a t).
-  intros Y; cbn in Y.
-  assert (t1 = t0 \/ 3 <= action_phase a0). {
-    apply Y; auto.
+  clear IHt.
+  destruct t; destruct a.
+  apply serial_singleton.
+
+  destruct p.
+  assert (t1 = t0 \/ 3 <= action_phase a0 /\ action_phase a < 3) as Y. {
+    apply swap_once_fixpoint_contents with (t:=[]++(t0,a)::(t1,a0)::t) (t1:=[]) (t2:=t).
+    now cbn.
+    auto.
   }
-  destruct H0.
-  rewrite <- H0; now constructor.
+  destruct or Y.
+  rewrite <- Y; now apply serial_same.
+
+  destruct Y as [Y1 Y2].
+  destruct (Nat.eq_dec t0 t1); [rewrite e; now apply serial_same|].
   apply serial_change; auto.
-  assert (forall a, ~ In (t0, a) t). {
-    intros aa I.
-    admit.
-  }
+  cbn; destruct (Nat.eq_dec t0 t1); try congruence.
   
-  contradict X.
-    apply eq_refl in Y.
-  functional induction (swap_forward_once t).
-  all: intros T E S.
-  - apply serial_same.
-    apply IHt0.
-    apply (trace_cons _ _ T).
-    destruct E as [t2 E].
-    exists (t2 ++ [(tid2, a2)]); rewrite <- app_assoc; now cbn.
-    inversion S; now rewrite H0.
-  - inversion S; subst.
-    destruct (Nat.eq_dec tid2 tid2); congruence.
-  - apply serial_change.
-    apply IHt0.
-    apply (trace_cons _ _ T).
-    destruct E as [t2 E].
-    exists (t2 ++ [(tid2, a2)]); rewrite <- app_assoc; now cbn.
-    inversion S; now rewrite H0.
-    
-    admit.
-  - destruct t; try constructor.
-    destruct p; destruct t; try constructor.
-    destruct p; contradiction.
+  assert (forall aa, In (t0, aa) t -> action_phase aa < 3). {
+    intros aa I.
+    assert (In (t0, aa) ((t0, a) :: (t1, a0) :: t)) by (right; now right).
+    apply phase_increase_in in H0; auto.
+    cbn in H0; destruct (Nat.eq_dec t0 t0); try congruence.
+    omega.
+  }
+  apply tid_phase_not_in_zero.
+  do 2 apply trace_cons in T; auto.
+  intros a1 I.
+  apply the_stupidest_helper in I.
+  destruct I as [sa [sl1 [sl2 [se sNI]]]].
+  remember (rev sl1) as rsl1.
+  replace sl1 with (rev rsl1) in se by (rewrite Heqrsl1; apply rev_involutive).
+  destruct rsl1.
+  simpl in se.
+  rewrite se in *.
+  generalize (swap_once_fixpoint_contents _ Sw [(t0, a)] t1 a0 t0 sa sl2 eq_refl).
+  intros X; destruct or X; [congruence|omega].
+
+  cbn in se.
+  rewrite <- app_assoc in se.
+  simpl in se.
+  rewrite se in *.
+  destruct p.
+  generalize (swap_once_fixpoint_contents _ Sw ((t0, a) :: (t1, a0) :: rev rsl1) t2 a2 t0 sa sl2 eq_refl).
+  intros X; destruct or X.
+  assert (In (t0, a2) sl1). {
+    apply In_rev.
+    rewrite <- Heqrsl1; rewrite X; now left.
+  }
+  apply (sNI a2 H1).
+  assert (action_phase sa < 3). {
+    apply H0.
+    apply in_or_app; right; right; now left.
+  }
+  intuition.
+Qed.
+
+Fixpoint swap_n t n :=
+  match n with
+  | 0 => t
+  | S n => swap_once (swap_n t n)
+  end.
+
+
+Definition example_txn:=
+  [(2, commit_done_txn); (2, complete_write_item 1); (2, commit_txn);
+     (2, validate_read_item 0); (2, seq_point); (2, lock_write_item);
+       (2, try_commit_txn); (2, write_item 4); (2, read_item 0);
+         (2, start_txn);
+   (1, commit_done_txn); (1, commit_txn); (1, validate_read_item 0);
+     (1, seq_point); (1, try_commit_txn); (1, read_item 0); (1, start_txn)].
+
+Definition example_txn2:=
+  [(3, commit_done_txn); (3, commit_txn); (3, validate_read_item 1);
+     (3, seq_point); (3, try_commit_txn); (3, read_item 1); (3, start_txn);
+   (1, abort_txn); (1, validate_read_item 1); (1, try_commit_txn);
+   (2, commit_txn); (2, complete_write_item 1); (2, commit_txn);
+     (2, validate_read_item 0); (2, seq_point); (2, lock_write_item);
+       (2, try_commit_txn); (2, write_item 4);
+   (1, read_item 0);
+   (2, read_item 0); (2, start_txn);
+   (1, start_txn)].
+
+
+Definition example_txn3 :=
+  [  (3, commit_done_txn);
+     (3, commit_txn);
+     (3, validate_read_item 2);
+     (3, seq_point);
+     (3, try_commit_txn);
+     (3, read_item 2);
+     (2, commit_done_txn);
+     (2, complete_write_item 2);
+     (2, commit_txn);
+     (3, start_txn);
+     (1, commit_done_txn);
+     (2, seq_point);
+     (2, lock_write_item);
+     (1, complete_write_item 1);
+     (1, commit_txn);
+     (1, seq_point);
+     (1, lock_write_item);
+     (2, try_commit_txn);
+     (2, write_item 0);
+     (1, try_commit_txn);
+     (1, write_item 1);
+     (1, start_txn);
+     (2, start_txn) ].
+
+Lemma example_txn3_sto: sto_trace example_txn3.
+  unfold example_txn3.
+  constructor; cbn; auto.
+  intuition; discriminate.
+
+  constructor; cbn; auto.
+  intros vers H.
+  repeat destruct or H; try discriminate.
+  inversion H; intuition.
+  contradiction.
+
+  constructor; cbn; auto.
+  intuition; discriminate.
+
+  constructor; cbn; auto.
+  intros v H.
+  repeat destruct or H; try discriminate.
+  contradiction.
+
+  constructor; cbn; auto.
 Admitted.
+
+Eval compute in (swap_n example_txn3 1001).
