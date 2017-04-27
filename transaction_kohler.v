@@ -2081,6 +2081,8 @@ Qed.
 
 
 
+(* NB this function can actually move sequential points around!
+   It's only correct if there are no aborted txns. *)
 
 Function swap_once (t:trace) { measure length t } :=
   match t with
@@ -2088,14 +2090,69 @@ Function swap_once (t:trace) { measure length t } :=
     if Nat.eq_dec tid2 tid1
     then (tid2, a2) :: swap_once ((tid1, a1) :: t')
     else if (action_phase a1 <? 3) || (3 <=? action_phase a2)
-         then (tid1, a1) :: (tid2, a2) :: t'
+         then (tid1, a1) :: swap_once ((tid2, a2) :: t')
          else (tid2, a2) :: swap_once ((tid1, a1) :: t')
   | _ => t
   end.
 Proof.
-  all: intros; cbn; apply lt_n_S; omega.
+  all: intros; cbn; try apply lt_n_S; omega.
 Defined.
 
+Fixpoint swap_n t n :=
+  match n with
+  | 0 => t
+  | S n => swap_once (swap_n t n)
+  end.
+
+
+Definition example_txn:=
+  [(2, commit_done_txn); (2, complete_write_item 1); (2, commit_txn);
+     (2, validate_read_item 0); (2, seq_point); (2, lock_write_item);
+       (2, try_commit_txn); (2, write_item 4); (2, read_item 0);
+         (2, start_txn);
+   (1, commit_done_txn); (1, commit_txn); (1, validate_read_item 0);
+     (1, seq_point); (1, try_commit_txn); (1, read_item 0); (1, start_txn)].
+
+Definition example_txn2:=
+  [(3, commit_done_txn); (3, commit_txn); (3, validate_read_item 1);
+     (3, seq_point); (3, try_commit_txn); (3, read_item 1); (3, start_txn);
+   (1, abort_txn); (1, validate_read_item 1); (1, try_commit_txn);
+   (2, commit_txn); (2, complete_write_item 1); (2, commit_txn);
+     (2, validate_read_item 0); (2, seq_point); (2, lock_write_item);
+       (2, try_commit_txn); (2, write_item 4);
+   (1, read_item 0);
+   (2, read_item 0); (2, start_txn);
+   (1, start_txn)].
+
+
+Definition example_txn3 :=
+  [  (3, commit_done_txn);
+     (3, commit_txn);
+     (3, validate_read_item 2);
+     (3, seq_point);
+     (3, try_commit_txn);
+     (3, read_item 2);
+     (2, commit_done_txn);
+     (2, complete_write_item 2);
+     (2, commit_txn);
+     (3, start_txn);
+     (1, commit_done_txn);
+     (2, seq_point);
+     (2, lock_write_item);
+     (1, complete_write_item 1);
+     (1, commit_txn);
+     (1, seq_point);
+     (1, lock_write_item);
+     (2, try_commit_txn);
+     (2, write_item 0);
+     (1, try_commit_txn);
+     (1, write_item 1);
+     (1, start_txn);
+     (2, start_txn) ].
+
+Eval compute in (swap_n example_txn3 8).
+
+(*
 Lemma swap_once_result t:
   swap_once t = t
   \/ (exists t1 t2 tid1 tid2 a1 a2,
@@ -2201,7 +2258,7 @@ Proof.
   inversion Sw; congruence.
   inversion Sw; now rewrite H0.
 Qed.
-
+*)
 
 Lemma tid_phase_zero_not_in tid t:
   sto_trace t ->
@@ -2258,6 +2315,7 @@ Proof.
   destruct H; [congruence|now apply A in H].
 Qed.
 
+(*
 Lemma swap_once_fixpoint_serial t:
   sto_trace t ->
   (exists t2, all_committed (t2 ++ t)) ->
@@ -2338,58 +2396,7 @@ Proof.
   }
   intuition.
 Qed.
-
-Fixpoint swap_n t n :=
-  match n with
-  | 0 => t
-  | S n => swap_once (swap_n t n)
-  end.
-
-
-Definition example_txn:=
-  [(2, commit_done_txn); (2, complete_write_item 1); (2, commit_txn);
-     (2, validate_read_item 0); (2, seq_point); (2, lock_write_item);
-       (2, try_commit_txn); (2, write_item 4); (2, read_item 0);
-         (2, start_txn);
-   (1, commit_done_txn); (1, commit_txn); (1, validate_read_item 0);
-     (1, seq_point); (1, try_commit_txn); (1, read_item 0); (1, start_txn)].
-
-Definition example_txn2:=
-  [(3, commit_done_txn); (3, commit_txn); (3, validate_read_item 1);
-     (3, seq_point); (3, try_commit_txn); (3, read_item 1); (3, start_txn);
-   (1, abort_txn); (1, validate_read_item 1); (1, try_commit_txn);
-   (2, commit_txn); (2, complete_write_item 1); (2, commit_txn);
-     (2, validate_read_item 0); (2, seq_point); (2, lock_write_item);
-       (2, try_commit_txn); (2, write_item 4);
-   (1, read_item 0);
-   (2, read_item 0); (2, start_txn);
-   (1, start_txn)].
-
-
-Definition example_txn3 :=
-  [  (3, commit_done_txn);
-     (3, commit_txn);
-     (3, validate_read_item 2);
-     (3, seq_point);
-     (3, try_commit_txn);
-     (3, read_item 2);
-     (2, commit_done_txn);
-     (2, complete_write_item 2);
-     (2, commit_txn);
-     (3, start_txn);
-     (1, commit_done_txn);
-     (2, seq_point);
-     (2, lock_write_item);
-     (1, complete_write_item 1);
-     (1, commit_txn);
-     (1, seq_point);
-     (1, lock_write_item);
-     (2, try_commit_txn);
-     (2, write_item 0);
-     (1, try_commit_txn);
-     (1, write_item 1);
-     (1, start_txn);
-     (2, start_txn) ].
+*)
 
 Lemma example_txn3_sto: sto_trace example_txn3.
   unfold example_txn3.
