@@ -1564,7 +1564,7 @@ Proof.
     omega.
 Qed.
   
-Lemma commitable_unconflicted t:
+Lemma committable_unconflicted t:
   sto_trace t ->
   (exists t2, sto_trace (t2 ++ t) /\ all_committed (t2 ++ t)) ->
   trace_unconflicted t.
@@ -1633,6 +1633,113 @@ Proof.
   all: inversion T1.
 
   1, 3, 4: apply trace_swap_internal_forward; cbn; auto.
+
+  - replace (write_version t) with (write_version ((tid2, a2) :: t)).
+    constructor.
+    now rewrite TP1.
+    destruct a2; cbn; auto.
+    inversion U.
+    simpl in H9; contradiction.
+    generalize (H8 tid1); intros X; destruct X as [X | X].
+    congruence.
+    contradict X.
+    apply trace_outstanding_read_head; auto.
+
+    destruct a2; inversion T.
+    all: try constructor; fix_phase; auto.
+    cbn; constructor; fix_phase; auto.
+    intros vv I.
+    assert (In (tid2, write_item vv) ((tid1, read_item v) :: t)) as II by (now right).
+    apply (H8 vv) in II; destruct II; [ congruence | assumption ].
+    intros vers I.
+    assert (In (tid2, read_item vers) ((tid1, read_item v) :: t)) as II by (now right).
+    apply (H8 vers) in II; destruct II; [ congruence | assumption ].
+    rewrite H7, H1 in *; clear H7 H1.
+    cbn in *.
+    apply complete_write_item_step with (val:=val); fix_phase; auto.
+    destruct (Nat.eq_dec tid2 tid1); [ congruence | assumption ].
+    destruct (Nat.eq_dec tid2 tid1); assumption.
+
+    destruct a2; cbn; auto.
+    inversion T.
+    simpl in H9; omega.
+
+  - apply lock_write_item_step with (v:=v).
+    now rewrite TP1.
+    now right.
+    cbn; destruct a2; auto.
+    inversion T; simpl in H9.
+    omega.
+    destruct a2; inversion T.
+    all: try solve [ cbn in *; contradiction ].
+    all: try constructor; fix_phase; auto.
+    cbn in H9; rewrite H9 in *; omega.
+    intros vv I.
+    assert (In (tid2, write_item vv) ((tid1, lock_write_item) :: t)) as II by (now right).
+    apply (H8 vv) in II; destruct II; [ congruence | assumption ].
+    intros vers I.
+    assert (In (tid2, read_item vers) ((tid1, lock_write_item) :: t)) as II by (now right).
+    apply (H8 vers) in II; destruct II; [ congruence | assumption ].
+    omega.
+Qed.
+
+Lemma swap_committing tid1 tid2 a1 a2 t:
+  sto_trace ((tid2, a2) :: (tid1, a1) :: t) ->
+  trace_unconflicted ((tid2, a2) :: (tid1, a1) :: t) ->
+  3 <= action_phase a2 ->
+  action_phase a2 <= 4 ->
+  tid1 <> tid2 ->
+  (a1 <> seq_point \/ a2 <> seq_point) ->
+  sto_trace ((tid1, a1) :: (tid2, a2) :: t).
+Proof.
+  intros T U AP2 AP2B N NS.
+  assert (tid1 > 0) as TZ1. {
+    apply (trace_in_nonzero _ a1 _ T); right; now left.
+  }
+  assert (tid2 > 0) as TZ2. {
+    apply (trace_in_nonzero _ a2 _ T); now left.
+  }
+  assert (tid_phase tid1 ((tid2, a2) :: t) = tid_phase tid1 t) as TP1. {
+    cbn; destruct (Nat.eq_dec tid1 tid2); congruence.
+  }
+  assert (tid_phase tid2 ((tid1, a1) :: t) = tid_phase tid2 t) as TP2. {
+    cbn; destruct (Nat.eq_dec tid2 tid1); congruence.
+  }
+
+  assert (sto_trace ((tid1, a1) :: t)) as T1
+      by (now apply (sto_trace_cons _ _ T)).
+  inversion T1; rewrite <- H0 in *; clear H0.
+  all: try solve [apply trace_swap_internal_forward; cbn; auto].
+  all: destruct a2; cbn in AP2; cbn in AP2B; try omega.
+  all: clear AP1 AP1B.
+  destruct or NS; contradiction.
+  all: clear NS.
+  all: try solve [apply trace_swap_internal_forward; cbn; auto].
+  all: inversion T.
+
+  admit.
+  - replace (write_version t) with (write_version ((tid2, seq_point) :: t))
+      by (now cbn).
+    apply complete_write_item_step with (val:=val).
+    now rewrite TP1.
+    now cbn.
+    cbn; destruct (Nat.eq_dec tid1 tid2); congruence.
+    constructor; auto.
+    now rewrite <- TP2.
+    admit.
+  - simpl in H10.
+    replace (write_version t) with (write_version ((tid2, validate_read_item v0) :: t))
+      by (now cbn).
+    apply complete_write_item_step with (val:=val).
+    now rewrite TP1.
+    now cbn.
+    cbn; destruct (Nat.eq_dec tid1 tid2); congruence.
+    constructor; auto.
+    now rewrite <- TP2.
+    
+    admit.
+    inversion T.
+    1, 3, 4: apply trace_swap_internal_forward; cbn; auto.
 
   - replace (write_version t) with (write_version ((tid2, a2) :: t)).
     constructor.
@@ -1865,7 +1972,7 @@ Proof.
   intros T1 A AP N.
   generalize (sto_trace_app _ _ T1); intros TB.
   assert (trace_unconflicted ((tid2, a2) :: (tid1, a1) :: t2)). {
-    apply commitable_unconflicted; auto.
+    apply committable_unconflicted; auto.
     now exists t1.
   }
   apply sto_trace_permutation_app with (t1:=(tid2,a2)::(tid1,a1)::t2).
