@@ -469,6 +469,14 @@ Qed.
 
 (** Facts about [remove_tid] *)
 
+Fixpoint filter_tid tid (t:trace) :=
+  match t with
+  | (tid', a) :: t' => if Nat.eq_dec tid tid'
+                       then (tid', a) :: filter_tid tid t'
+                       else filter_tid tid t'
+  | [] => []
+  end.
+
 Fixpoint remove_tid tid (t:trace) :=
   match t with
   | (tid', a) :: t' => if Nat.eq_dec tid tid'
@@ -1698,34 +1706,34 @@ Proof.
 Qed.
 
 
-Inductive trace_unconflicted : trace -> Prop :=
-| nil_unc: trace_unconflicted []
+Inductive unconflicted : trace -> Prop :=
+| nil_unc: unconflicted []
 | internal_unc: forall tid a t,
-    trace_unconflicted t ->
+    unconflicted t ->
     action_internal a ->
-    trace_unconflicted ((tid, a) :: t)
+    unconflicted ((tid, a) :: t)
 | read_unc: forall tid ad v t,
-    trace_unconflicted t ->
+    unconflicted t ->
     locked_by ad t 0 = 0 ->
     write_version ad t = v ->
-    trace_unconflicted ((tid, read_item ad v) :: t)
+    unconflicted ((tid, read_item ad v) :: t)
 | validate_read_unc: forall tid ad v t,
-    trace_unconflicted t ->
-    trace_unconflicted ((tid, validate_read_item ad v) :: t)
+    unconflicted t ->
+    unconflicted ((tid, validate_read_item ad v) :: t)
 | lock_unc: forall tid ad t,
-    trace_unconflicted t ->
+    unconflicted t ->
     (forall tid', tid = tid' \/ ~ tid_outstanding_read tid' ad t) ->
-    trace_unconflicted ((tid, lock_write_item ad) :: t)
+    unconflicted ((tid, lock_write_item ad) :: t)
 | complete_unc: forall tid ad v t,
-    trace_unconflicted t ->
-    trace_unconflicted ((tid, complete_write_item ad v) :: t)
+    unconflicted t ->
+    unconflicted ((tid, complete_write_item ad v) :: t)
 | unlock_unc: forall tid ad t,
-    trace_unconflicted t ->
-    trace_unconflicted ((tid, unlock_write_item ad) :: t).
+    unconflicted t ->
+    unconflicted ((tid, unlock_write_item ad) :: t).
 
 Lemma unconflicted_cons ta t:
-  trace_unconflicted (ta :: t) ->
-  trace_unconflicted t.
+  unconflicted (ta :: t) ->
+  unconflicted t.
 Proof.
   intros H; inversion H; auto.
 Qed.
@@ -1865,13 +1873,13 @@ Qed.
 Lemma committable_unconflicted t:
   sto_trace t ->
   (exists t2, sto_trace (t2 ++ t) /\ all_committed (t2 ++ t)) ->
-  trace_unconflicted t.
+  unconflicted t.
 Proof.
   intros T; induction T; intros NU; destruct NU as [t2 [NU1 NU2]].
   1: constructor.
   Local Ltac myexists :=
     match goal with
-    | [ IHT: ?a -> trace_unconflicted ?t1,
+    | [ IHT: ?a -> unconflicted ?t1,
         H: sto_trace (?t2 ++ ?p :: ?t1) |- _ ] =>
       apply IHT; exists (t2 ++ [p]); rewrite <- app_assoc; cbn; split; auto
     end.
@@ -1920,7 +1928,7 @@ Qed.
 
 Lemma swap_forward_unconflicted tid1 tid2 a1 a2 t:
   sto_trace ((tid2, a2) :: (tid1, a1) :: t) ->
-  trace_unconflicted ((tid2, a2) :: (tid1, a1) :: t) ->
+  unconflicted ((tid2, a2) :: (tid1, a1) :: t) ->
   action_phase a1 < 3 ->
   tid1 <> tid2 ->
   sto_trace ((tid1, a1) :: (tid2, a2) :: t).
@@ -2024,7 +2032,7 @@ Qed.
 
 Lemma swap_backward_committing tid1 tid2 a1 a2 t:
   sto_trace ((tid2, a2) :: (tid1, a1) :: t) ->
-  trace_unconflicted ((tid2, a2) :: (tid1, a1) :: t) ->
+  unconflicted ((tid2, a2) :: (tid1, a1) :: t) ->
   3 <= action_phase a2 ->
   action_phase a2 <= 4 ->
   action_phase a1 <> 6 ->
@@ -2289,10 +2297,10 @@ Proof.
 Qed.
 
 Lemma unconflicted_permutation_cons t1 t2 tid a:
-  trace_unconflicted ((tid, a) :: t1) ->
-  trace_unconflicted t2 ->
+  unconflicted ((tid, a) :: t1) ->
+  unconflicted t2 ->
   trace_same_end_state t1 t2 ->
-  trace_unconflicted ((tid, a) :: t2).
+  unconflicted ((tid, a) :: t2).
 Proof.
   intros T1X T2 S.
   unfold trace_same_end_state in S.
@@ -2312,7 +2320,7 @@ Qed.
 
 Lemma trace_same_end_state_unconflicted_forward tid2 a2 tid1 a1 t:
   sto_trace ((tid2, a2) :: (tid1, a1) :: t) ->
-  trace_unconflicted ((tid2, a2) :: (tid1, a1) :: t) ->
+  unconflicted ((tid2, a2) :: (tid1, a1) :: t) ->
   action_phase a1 < 3 ->
   tid1 <> tid2 ->
   trace_same_end_state ((tid2, a2) :: (tid1, a1) :: t)
@@ -2351,7 +2359,7 @@ Qed.
 
 Lemma trace_same_end_state_unconflicted_backward tid2 a2 tid1 a1 t:
   sto_trace ((tid2, a2) :: (tid1, a1) :: t) ->
-  trace_unconflicted ((tid2, a2) :: (tid1, a1) :: t) ->
+  unconflicted ((tid2, a2) :: (tid1, a1) :: t) ->
   3 <= action_phase a2 ->
   tid1 <> tid2 ->
   trace_same_end_state ((tid2, a2) :: (tid1, a1) :: t)
@@ -2390,10 +2398,10 @@ Qed.
 
 Lemma unconflicted_unconflicted_forward tid2 a2 tid1 a1 t:
   sto_trace ((tid2, a2) :: (tid1, a1) :: t) ->
-  trace_unconflicted ((tid2, a2) :: (tid1, a1) :: t) ->
+  unconflicted ((tid2, a2) :: (tid1, a1) :: t) ->
   action_phase a1 < 3 ->
   tid1 <> tid2 ->
-  trace_unconflicted ((tid1, a1) :: (tid2, a2) :: t).
+  unconflicted ((tid1, a1) :: (tid2, a2) :: t).
 Proof.
   intros T U AP N.
   assert (tid1 > 0) as TZ1. {
@@ -2408,13 +2416,13 @@ Proof.
   assert (tid_phase tid2 ((tid1, a1) :: t) = tid_phase tid2 t) as TP2. {
     cbn; destruct (Nat.eq_dec tid2 tid1); congruence.
   }
-  assert (trace_unconflicted ((tid1, a1) :: t)) as U1. {
+  assert (unconflicted ((tid1, a1) :: t)) as U1. {
     apply (unconflicted_cons _ _ U).
   }
-  assert (trace_unconflicted t) as UX. {
+  assert (unconflicted t) as UX. {
     apply (unconflicted_cons _ _ U1).
   }
-  assert (trace_unconflicted ((tid2, a2) :: t)) as U2. {
+  assert (unconflicted ((tid2, a2) :: t)) as U2. {
     inversion U.
     - now apply internal_unc.
     - apply read_unc; auto.
@@ -2477,10 +2485,10 @@ Qed.
 
 Lemma unconflicted_unconflicted_backward tid2 a2 tid1 a1 t:
   sto_trace ((tid2, a2) :: (tid1, a1) :: t) ->
-  trace_unconflicted ((tid2, a2) :: (tid1, a1) :: t) ->
+  unconflicted ((tid2, a2) :: (tid1, a1) :: t) ->
   3 <= action_phase a2 ->
   tid1 <> tid2 ->
-  trace_unconflicted ((tid1, a1) :: (tid2, a2) :: t).
+  unconflicted ((tid1, a1) :: (tid2, a2) :: t).
 Proof.
   intros T U AP N.
   assert (tid1 > 0) as TZ1. {
@@ -2495,13 +2503,13 @@ Proof.
   assert (tid_phase tid2 ((tid1, a1) :: t) = tid_phase tid2 t) as TP2. {
     cbn; destruct (Nat.eq_dec tid2 tid1); congruence.
   }
-  assert (trace_unconflicted ((tid1, a1) :: t)) as U1. {
+  assert (unconflicted ((tid1, a1) :: t)) as U1. {
     apply (unconflicted_cons _ _ U).
   }
-  assert (trace_unconflicted t) as UX. {
+  assert (unconflicted t) as UX. {
     apply (unconflicted_cons _ _ U1).
   }
-  assert (trace_unconflicted ((tid2, a2) :: t)) as U2. {
+  assert (unconflicted ((tid2, a2) :: t)) as U2. {
     inversion U; subst.
     - now apply internal_unc.
     - apply read_unc; auto.
@@ -2555,7 +2563,7 @@ Lemma swap_forward_all_committed tid1 tid2 a1 a2 t1 t2:
 Proof.
   intros T1 A AP N.
   generalize (trace_app _ _ T1); intros TB.
-  assert (trace_unconflicted ((tid2, a2) :: (tid1, a1) :: t2)). {
+  assert (unconflicted ((tid2, a2) :: (tid1, a1) :: t2)). {
     apply committable_unconflicted; auto.
     now exists t1.
   }
@@ -2574,7 +2582,7 @@ Lemma swap_backward_all_committed tid1 tid2 a1 a2 t1 t2:
 Proof.
   intros T1 A AP N.
   generalize (trace_app _ _ T1); intros TB.
-  assert (trace_unconflicted ((tid2, a2) :: (tid1, a1) :: t2)). {
+  assert (unconflicted ((tid2, a2) :: (tid1, a1) :: t2)). {
     apply committable_unconflicted; auto.
     now exists t1.
   }
@@ -2732,6 +2740,17 @@ Proof.
   induction t; now constructor.
 Qed.
 
+Lemma swap_permutation_tid_eq t1 t2 tid:
+  swap_permutation t1 t2 ->
+  filter_tid tid t1 = filter_tid tid t2.
+Proof.
+  intros SP; induction SP; auto.
+  - destruct x; cbn; destruct (Nat.eq_dec tid t); now rewrite IHSP.
+  - cbn; destruct (Nat.eq_dec tid tid2); destruct (Nat.eq_dec tid tid1); auto.
+    rewrite <- e in *; rewrite <- e0 in *; unfold swappable in H; cln; discriminate.
+  - congruence.
+Qed.
+
 Lemma swap_permutation_app_head {t1 t2} l:
   swap_permutation t1 t2 ->
   swap_permutation (l ++ t1) (l ++ t2).
@@ -2806,10 +2825,10 @@ Qed.
 Lemma swap_permutation_trace t1 t2:
   swap_permutation t1 t2 ->
   sto_trace t1 ->
-  trace_unconflicted t1 ->
+  unconflicted t1 ->
   no_aborted t1 ->
     sto_trace t2
-    /\ trace_unconflicted t2
+    /\ unconflicted t2
     /\ (forall ad, locked_by ad t1 0 = locked_by ad t2 0)
     /\ (forall ad, write_version ad t1 = write_version ad t2).
 Proof.
@@ -3279,7 +3298,7 @@ Qed.
 
 Lemma serial_swap_permutation' t:
   sto_trace t ->
-  trace_unconflicted t ->
+  unconflicted t ->
   no_aborted t ->  
   exists tt,
     swap_permutation t tt /\ serial_trace tt.
@@ -3432,12 +3451,12 @@ Qed.
 
 Lemma serial_swap_permutation t:
   sto_trace t ->
-  trace_unconflicted t ->
+  unconflicted t ->
   no_aborted t ->  
   exists tt,
     swap_permutation t tt
     /\ sto_trace tt
-    /\ trace_unconflicted tt
+    /\ unconflicted tt
     /\ no_aborted tt
     /\ serial_trace tt.
 Proof.
@@ -3593,7 +3612,7 @@ Qed.
 
 Lemma swap_once_trace t:
   sto_trace t ->
-  trace_unconflicted t ->
+  unconflicted t ->
   no_aborted t ->
   sto_trace (swap_once t).
 Proof.
@@ -3604,7 +3623,7 @@ Qed.
 
 Lemma swap_n_trace t n:
   sto_trace t ->
-  trace_unconflicted t ->
+  unconflicted t ->
   no_aborted t ->
   sto_trace (swap_n t n).
 Proof.
