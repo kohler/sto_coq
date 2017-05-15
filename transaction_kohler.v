@@ -2809,19 +2809,6 @@ Proof.
   - congruence.
 Qed.
 
-Lemma swap_permutation_refl_skip x t:
-  (forall t2, swap_permutation (x :: t) t2 -> x :: t = t2) ->
-  forall t2, swap_permutation t t2 -> t = t2.
-Proof.
-  intros.
-  assert (x :: t = x :: t2 -> t = t2). {
-    intros; inversion H1; auto.
-  }
-  apply H1.
-  apply H.
-  now constructor.
-Qed.
-
 Lemma swap_permutation_trace t1 t2:
   swap_permutation t1 t2 ->
   sto_trace t1 ->
@@ -2905,134 +2892,6 @@ Lemma serial_app_head_inv t1 t2:
 Proof.
   induction t1; cbn; auto.
   intros; apply serial_cons in H; auto.
-Qed.
-
-
-Lemma rev_split {A:Type} (l:list A):
-  l = [] \/ exists l1 a, l = l1 ++ [a].
-Proof.
-  induction l using rev_ind.
-  now left.
-  right; now exists l, x.
-Qed.
-
-Lemma trace_find_previous {tid2 a2 tid1 a1 t}:
-  sto_trace ((tid2, a2) :: (tid1, a1) :: t) ->
-  tid2 <> tid1 ->
-  a2 <> start_txn ->
-  exists t1 tidx ax a0 t2,
-    (tid1, a1) :: t = t1 ++ (tidx, ax) :: (tid2, a0) :: t2
-    /\ tidx <> tid2
-    /\ tid_phase tid2 t1 = 0.
-Proof.
-  intros T NE A.
-  assert (tid_phase tid2 t > 0). {
-    inversion T; [ congruence | cbn in * .. ].
-    all: destruct (Nat.eq_dec tid2 tid1); [ congruence | try omega ].
-  }
-  generalize (tid_phase_split tid2 t (tid_phase tid2 t) eq_refl H); intros X.
-  destruct X as [t1 [aa [t2 [X1 [X2 X3]]]]].
-  generalize (rev_split t1); intros X; destruct X as [X | [t1l [[tidl al] X]]].
-  exists [], tid1, a1, aa, t2; rewrite X1, X; cbn; intuition.
-  exists ((tid1, a1) :: t1l), tidl, al, aa, t2; rewrite X1, X; cbn.
-  rewrite <- app_assoc; cbn.
-  split; auto.
-  destruct (Nat.eq_dec tid2 tid1); [congruence|].
-  rewrite X in *; clear X.
-  split.
-  destruct (Nat.eq_dec tidl tid2). {
-    rewrite e in *; clear e.
-    rewrite X1 in T.
-    do 2 apply trace_cons in T.
-    generalize (tid_phase_zero_not_in _ _ X3); intros M.
-    assert (~ In (tid2, al) (t1l ++ [(tid2, al)])) by (apply M).
-    assert (In (tid2, al) (t1l ++ [(tid2, al)])) by (apply in_or_app; right; now left).
-    contradiction.
-  }
-  auto.
-  now apply tid_phase_zero_app in X3.
-Qed.
-
-
-Lemma swap_permutation_fixpoint_serial t:
-  sto_trace t ->
-  (forall t2, swap_permutation t t2 -> t = t2) ->
-  serial_trace t.
-Proof.
-  induction t; intros T S.
-  now apply serial_empty.
-  assert (forall t2, swap_permutation t t2 -> t = t2)
-    as S2 by (now apply (swap_permutation_refl_skip _ _ S)).
-  assert (serial_trace t) as ST by (now apply (IHt (trace_cons _ _ T))).
-  destruct a as [tid a].
-  destruct (action_dec a start_txn).
-  rewrite e in *; inversion T; now apply serial_new.
-  assert (tid_phase tid t > 0) as PNZ. {
-    destruct a; try congruence; inversion T; omega.
-  }
-  destruct t; [ cbn in PNZ; omega | ].
-  destruct p as [tid' a'].
-  destruct (Nat.eq_dec tid tid'); [ rewrite e in *; now apply serial_same | ].
-
-  enough (exists tt, swap_permutation ((tid, a) :: (tid', a') :: t) tt /\ tt <> (tid, a) :: (tid', a') :: t).
-  destruct H as [tt [PP XX]].
-  apply S in PP.
-  congruence.
-
-  assert ((action_phase a < 3 \/ a = seq_point)
-          \/ (a <> seq_point /\ 3 <= action_phase a)) as A. {
-    destruct a; cbn.
-    all: try solve [ left; left; omega ].
-    left; right; auto.
-    all: solve [ right; split; [ congruence | omega ]].
-  }
-
-  destruct A.
-
-  - assert (exists t1 tidx ax ay t2,
-               (tid', a') :: t = t1 ++ (tidx, ax) :: (tid, ay) :: t2
-               /\ tidx <> tid
-               /\ tid_phase tid t1 = 0) as A. {
-      apply (@trace_find_previous _ a); auto.
-    }
-    destruct A as [t1 [tidx [ax [ay [t2 [E [N P]]]]]]].
-    assert (tid_phase tid ((tid', a') :: t) = action_phase ay) as TP. {
-      rewrite E in *.
-      rewrite tid_phase_zero_app_skip; auto.
-      cbn; do 2 cln; auto.
-    }
-    assert (action_phase ay < 3) as AYP. {
-      destruct H.
-      - enough (tid_phase tid ((tid,a) :: (tid',a') :: t) >= action_phase ay).
-        cbn in H0; cln; omega.
-        apply phase_increase_in; auto.
-        rewrite E; right.
-        apply in_or_app; right; right; now left.
-      - rewrite H in *; clear H.
-        inversion T.
-        rewrite H1 in TP; omega.
-    }
-    enough (swap_permutation (t1 ++ (tidx, ax) :: (tid, ay) :: t2)
-                             (t1 ++ (tid, ay) :: (tidx, ax) :: t2)).
-    rewrite <- E in H0; apply S2 in H0; rewrite E in H0.
-    apply app_inv_head in H0.
-    inversion H0; congruence.
-    apply swap_permutation_app_head.
-    apply swap_perm_swap.
-    unfold swappable.
-    do 3 cln.
-    destruct ay; auto.
-    cbn in AYP; omega.
-
-  - destruct H.
-    assert (swappable tid a tid' a' = true) as Sw. {
-      unfold swappable.
-      do 3 cln.
-      destruct a'; auto.
-      destruct a; auto; cbn in l; omega.
-    }
-    exists ((tid', a') :: (tid, a) :: t); split; try congruence.
-    now apply swap_perm_swap.
 Qed.
 
 
@@ -3130,7 +2989,7 @@ Proof.
   }
 Qed.
 
-Lemma swap_permutation_serial_backward tid a t1 t2:
+Lemma swap_permutation_backward tid a t1 t2:
   a <> seq_point ->
   3 <= action_phase a ->
   (forall a', ~ In (tid, a') t1) ->
@@ -3154,7 +3013,7 @@ Proof.
   destruct a; auto.
 Qed.
 
-Lemma swap_permutation_serial_forward_once tid a t1 t2:
+Lemma swap_permutation_forward_once tid a t1 t2:
   action_phase a < 3 ->
   (forall a', ~ In (tid, a') t1) ->
   swap_permutation (t1 ++ (tid, a) :: t2) ((tid, a) :: t1 ++ t2).
@@ -3177,7 +3036,7 @@ Proof.
   cbn in NS; omega.
 Qed.
 
-Lemma swap_permutation_serial_forward tid t1 t2 t3:
+Lemma swap_permutation_forward tid t1 t2 t3:
   (forall a', ~ In (tid, a') t1) ->
   (forall tid' a', In (tid', a') t2 -> tid = tid' /\ action_phase a' < 3) ->
   swap_permutation (t1 ++ t2 ++ t3) (t2 ++ t1 ++ t3).
@@ -3189,7 +3048,7 @@ Proof.
   }
   apply swap_perm_skip with (x:=a) in H.
   apply swap_perm_trans with (t2:=a::t1++t2++t3); auto.
-  destruct a; apply swap_permutation_serial_forward_once.
+  destruct a; apply swap_permutation_forward_once.
   generalize (N2 t a); intuition.
   intros a' I; apply (N1 a').
   enough (t = tid).
@@ -3301,7 +3160,8 @@ Lemma serial_swap_permutation' t:
   unconflicted t ->
   no_aborted t ->  
   exists tt,
-    swap_permutation t tt /\ serial_trace tt.
+    swap_permutation t tt
+    /\ serial_trace tt.
 Proof.
   induction t; intros T U NA.
   exists []; split; constructor.
@@ -3342,7 +3202,7 @@ Proof.
     apply swap_perm_skip.
     apply swap_perm_trans with (t2:=tt); auto.
     rewrite G1.
-    apply swap_permutation_serial_forward with (tid0:=tid).
+    apply swap_permutation_forward with (tid0:=tid).
     apply (trace_nonzero_segment tid tt t1); auto.
     intros x I; rewrite G1; apply in_or_app; now left.
     intros tid' a' I.
@@ -3391,7 +3251,7 @@ Proof.
     apply swap_perm_trans with (t2:=(tid, a)::tt); auto.
     apply swap_perm_skip; auto.
     rewrite G1.
-    apply swap_permutation_serial_backward; auto.
+    apply swap_permutation_backward; auto.
     intuition.
     intuition.
     apply (trace_nonzero_segment tid tt t1); auto.
@@ -3475,6 +3335,104 @@ Qed.
 
 
 (** BELOW HERE LESS INTERESTING *******************************************)
+Lemma swap_permutation_refl_skip x t:
+  (forall t2, swap_permutation (x :: t) t2 -> x :: t = t2) ->
+  forall t2, swap_permutation t t2 -> t = t2.
+Proof.
+  intros.
+  assert (x :: t = x :: t2 -> t = t2). {
+    intros; inversion H1; auto.
+  }
+  apply H1.
+  apply H.
+  now constructor.
+Qed.
+
+Lemma swap_permutation_fixpoint_serial t:
+  sto_trace t ->
+  (forall t2, swap_permutation t t2 -> t = t2) ->
+  serial_trace t.
+Proof.
+  induction t; intros T S.
+  now apply serial_empty.
+  assert (forall t2, swap_permutation t t2 -> t = t2)
+    as S2 by (now apply (swap_permutation_refl_skip _ _ S)).
+  assert (serial_trace t) as ST by (now apply (IHt (trace_cons _ _ T))).
+  destruct a as [tid a].
+  destruct (action_dec a start_txn).
+  rewrite e in *; inversion T; now apply serial_new.
+  assert (tid_phase tid t > 0) as PNZ. {
+    destruct a; try congruence; inversion T; omega.
+  }
+  destruct t; [ cbn in PNZ; omega | ].
+  destruct p as [tid' a'].
+  destruct (Nat.eq_dec tid tid'); [ rewrite e in *; now apply serial_same | ].
+
+  enough (exists tt, swap_permutation ((tid, a) :: (tid', a') :: t) tt /\ tt <> (tid, a) :: (tid', a') :: t).
+  destruct H as [tt [PP XX]].
+  apply S in PP.
+  congruence.
+
+  assert ((action_phase a < 3 \/ a = seq_point)
+          \/ (a <> seq_point /\ 3 <= action_phase a)) as A. {
+    destruct a; cbn.
+    all: try solve [ left; left; omega ].
+    left; right; auto.
+    all: solve [ right; split; [ congruence | omega ]].
+  }
+
+  destruct A.
+
+  - assert (exists t1 tidx ax ay t2,
+               (tid', a') :: t = t1 ++ (tidx, ax) :: (tid, ay) :: t2
+               /\ tidx <> tid
+               /\ tid_phase tid t1 = 0) as A. {
+      apply (@trace_find_previous _ a); auto.
+    }
+    destruct A as [t1 [tidx [ax [ay [t2 [E [N P]]]]]]].
+    assert (tid_phase tid ((tid', a') :: t) = action_phase ay) as TP. {
+      rewrite E in *.
+      rewrite tid_phase_zero_app_skip; auto.
+      cbn; do 2 cln; auto.
+    }
+    assert (action_phase ay < 3) as AYP. {
+      destruct H.
+      - enough (tid_phase tid ((tid,a) :: (tid',a') :: t) >= action_phase ay).
+        cbn in H0; cln; omega.
+        apply phase_increase_in; auto.
+        rewrite E; right.
+        apply in_or_app; right; right; now left.
+      - rewrite H in *; clear H.
+        inversion T.
+        rewrite H1 in TP; omega.
+    }
+    enough (swap_permutation (t1 ++ (tidx, ax) :: (tid, ay) :: t2)
+                             (t1 ++ (tid, ay) :: (tidx, ax) :: t2)).
+    rewrite <- E in H0; apply S2 in H0; rewrite E in H0.
+    apply app_inv_head in H0.
+    inversion H0; congruence.
+    apply swap_permutation_app_head.
+    apply swap_perm_swap.
+    unfold swappable.
+    do 3 cln.
+    destruct ay; auto.
+    cbn in AYP; omega.
+
+  - destruct H.
+    assert (swappable tid a tid' a' = true) as Sw. {
+      unfold swappable.
+      do 3 cln.
+      destruct a'; auto.
+      destruct a; auto; cbn in l; omega.
+    }
+    exists ((tid', a') :: (tid, a) :: t); split; try congruence.
+    now apply swap_perm_swap.
+Qed.
+
+
+
+
+
 
 Inductive subl {A:Type} : relation (list A) :=
 | subl_nil : subl [] []
@@ -3662,6 +3620,51 @@ Proof.
   now apply IHt1.
 Qed.
 
+
+Lemma rev_split {A:Type} (l:list A):
+  l = [] \/ exists l1 a, l = l1 ++ [a].
+Proof.
+  induction l using rev_ind.
+  now left.
+  right; now exists l, x.
+Qed.
+
+Lemma trace_find_previous {tid2 a2 tid1 a1 t}:
+  sto_trace ((tid2, a2) :: (tid1, a1) :: t) ->
+  tid2 <> tid1 ->
+  a2 <> start_txn ->
+  exists t1 tidx ax a0 t2,
+    (tid1, a1) :: t = t1 ++ (tidx, ax) :: (tid2, a0) :: t2
+    /\ tidx <> tid2
+    /\ tid_phase tid2 t1 = 0.
+Proof.
+  intros T NE A.
+  assert (tid_phase tid2 t > 0). {
+    inversion T; [ congruence | cbn in * .. ].
+    all: destruct (Nat.eq_dec tid2 tid1); [ congruence | try omega ].
+  }
+  generalize (tid_phase_split tid2 t (tid_phase tid2 t) eq_refl H); intros X.
+  destruct X as [t1 [aa [t2 [X1 [X2 X3]]]]].
+  generalize (rev_split t1); intros X; destruct X as [X | [t1l [[tidl al] X]]].
+  exists [], tid1, a1, aa, t2; rewrite X1, X; cbn; intuition.
+  exists ((tid1, a1) :: t1l), tidl, al, aa, t2; rewrite X1, X; cbn.
+  rewrite <- app_assoc; cbn.
+  split; auto.
+  destruct (Nat.eq_dec tid2 tid1); [congruence|].
+  rewrite X in *; clear X.
+  split.
+  destruct (Nat.eq_dec tidl tid2). {
+    rewrite e in *; clear e.
+    rewrite X1 in T.
+    do 2 apply trace_cons in T.
+    generalize (tid_phase_zero_not_in _ _ X3); intros M.
+    assert (~ In (tid2, al) (t1l ++ [(tid2, al)])) by (apply M).
+    assert (In (tid2, al) (t1l ++ [(tid2, al)])) by (apply in_or_app; right; now left).
+    contradiction.
+  }
+  auto.
+  now apply tid_phase_zero_app in X3.
+Qed.
 
 Lemma swap_once_fixpoint_contents t:
   sto_trace t ->
